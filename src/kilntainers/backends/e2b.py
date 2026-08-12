@@ -431,7 +431,7 @@ class E2BSandbox(Sandbox):
 
         try:
             await asyncio.wait_for(
-                self._e2b_sandbox.kill(),
+                self._e2b_sandbox.kill(),  # ty: ignore[no-matching-overload]
                 timeout=10,
             )
         except asyncio.TimeoutError:

@@ -1,5 +1,5 @@
 [project]
-name = "kilntainers"
+name = "mcp-sandbox-computer-vm-for-ai"
 version = "0.2.0"
 description = "Named Docker and Fly Machine sandbox computers with an MCP App dashboard"
 authors = [
@@ -27,11 +27,12 @@ Upstream = "https://github.com/Kiln-AI/Kilntainers"
 
 [project.optional-dependencies]
 wasm = ["wasmtime>=41.0.0"]
-all = ["kilntainers[wasm]"]
+all = ["mcp-sandbox-computer-vm-for-ai[wasm]"]
 
 [project.scripts]
 kilntainers = "kilntainers.cli:main"
 mcp-sandbox-computer = "kilntainers.cli:main"
+mcp-sandbox-computer-vm-for-ai = "kilntainers.cli:main"
 
 [project.entry-points."kilntainers.backends"]
 docker = "kilntainers.backends.docker:DockerBackend"
