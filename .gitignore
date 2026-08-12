@@ -7,3 +7,4 @@ dist/
 .env
 .coverage
 
+/src/kilntainers/__pycache__
