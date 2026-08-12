@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Cut a PyPI and GitHub release while keeping the familiar `npm run release`
-// interface used by sibling FLUJO projects. npm is only the task runner; the
-// published artifact is the Python distribution built and uploaded by uv.
+// interface used by sibling FLUJO projects. npm is only the task runner; a
+// dedicated GitHub Actions workflow publishes through PyPI Trusted Publishing.
 //
 //   npm run release                 patch bump
 //   npm run release minor           minor bump
@@ -17,6 +17,7 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = "flujo-app/mcp-sandbox-computer-vm-for-ai";
 const distribution = "mcp-sandbox-computer-vm-for-ai";
+const releaseWorkflow = "release.yml";
 const args = process.argv.slice(2);
 const checkOnly = takeFlag("--check");
 const dryRun = takeFlag("--dry-run");
@@ -72,16 +73,9 @@ if (existing) fail(`${distribution} ${next} already exists on PyPI`);
 runNpm(["run", "check"]);
 if (dryRun) {
   console.log(
-    `\nDry run passed. Would create v${next}, publish ${distribution} ${next} to PyPI, push main and the tag, and create a GitHub release.`,
+    `\nDry run passed. Would create v${next}, push main and its tag, then dispatch GitHub Trusted Publishing for ${distribution} ${next}.`,
   );
   process.exit(0);
-}
-
-if (!hasPypiCredentials()) {
-  fail(
-    "PyPI credentials are not configured. Set UV_PUBLISH_TOKEN (recommended), " +
-      "or UV_PUBLISH_USERNAME and UV_PUBLISH_PASSWORD.",
-  );
 }
 
 runNpm(["version", bump, "-m", "Release v%s"]);
@@ -102,26 +96,27 @@ if (artifacts.length !== 2) {
     `expected one wheel and one source archive for ${artifactPrefix}, found ${artifacts.length}`,
   );
 }
-run("uv", [
-  "publish",
-  "--check-url",
-  "https://pypi.org/simple",
-  ...artifacts,
-]);
-
-await waitForPypi(version);
 run("git", ["push", remote, "main", tag]);
 run("gh", [
-  "release",
-  "create",
-  tag,
+  "workflow",
+  "run",
+  releaseWorkflow,
   "--repo",
   repository,
-  "--verify-tag",
-  "--generate-notes",
-  "--title",
+  "--ref",
   tag,
 ]);
+const releaseSha = git(["rev-parse", "HEAD"]);
+const workflowRun = await waitForWorkflow(releaseSha);
+run("gh", [
+  "run",
+  "watch",
+  String(workflowRun.databaseId),
+  "--repo",
+  repository,
+  "--exit-status",
+]);
+await waitForPypi(version);
 
 console.log(`\nReleased ${distribution} ${version}:`);
 console.log(`  PyPI:   https://pypi.org/project/${distribution}/${version}/`);
@@ -166,10 +161,37 @@ async function waitForPypi(version) {
   fail(`${distribution} ${version} was uploaded but did not appear on PyPI`);
 }
 
-function hasPypiCredentials() {
-  return Boolean(
-    process.env.UV_PUBLISH_TOKEN ||
-      (process.env.UV_PUBLISH_USERNAME && process.env.UV_PUBLISH_PASSWORD),
+async function waitForWorkflow(sha) {
+  console.log("\nWaiting for the Trusted Publishing workflow ...");
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    const result = spawnSync(
+      "gh",
+      [
+        "run",
+        "list",
+        "--repo",
+        repository,
+        "--workflow",
+        releaseWorkflow,
+        "--commit",
+        sha,
+        "--event",
+        "workflow_dispatch",
+        "--limit",
+        "1",
+        "--json",
+        "databaseId,url",
+      ],
+      { cwd: root, encoding: "utf8" },
+    );
+    if (result.status === 0) {
+      const runs = JSON.parse(result.stdout || "[]");
+      if (runs.length > 0) return runs[0];
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+  }
+  fail(
+    `Trusted Publishing did not start; inspect https://github.com/${repository}/actions/workflows/${releaseWorkflow}`,
   );
 }
 
