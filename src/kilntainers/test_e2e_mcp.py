@@ -11,6 +11,7 @@ Skip with: pytest -m "not e2e"
 
 import asyncio
 import json
+import sys
 
 import pytest
 
@@ -42,9 +43,7 @@ class TestE2EStdioProtocol:
         async def run_session():
             # Start kilntainers as a subprocess
             proc = await asyncio.create_subprocess_exec(
-                "uv",
-                "run",
-                "python",
+                sys.executable,
                 "-m",
                 "kilntainers",
                 stdin=asyncio.subprocess.PIPE,
@@ -123,9 +122,17 @@ class TestE2EStdioProtocol:
                 assert "result" in response
 
                 tools = response["result"].get("tools", [])
-                assert len(tools) == 1
-                assert tools[0]["name"] == "sandbox_exec"
-                assert "description" in tools[0]
+                tool_names = {tool["name"] for tool in tools}
+                assert tool_names == {
+                    "sandbox_exec",
+                    "computer_dashboard",
+                    "computer_list",
+                    "computer_create",
+                    "computer_restart",
+                    "computer_factory_reset",
+                    "computer_delete",
+                }
+                assert all("description" in tool for tool in tools)
 
             finally:
                 # Close stdin to signal shutdown
@@ -145,9 +152,7 @@ class TestE2EStdioProtocol:
         async def run_session():
             # Start kilntainers as a subprocess
             proc = await asyncio.create_subprocess_exec(
-                "uv",
-                "run",
-                "python",
+                sys.executable,
                 "-m",
                 "kilntainers",
                 stdin=asyncio.subprocess.PIPE,
@@ -240,9 +245,7 @@ class TestE2EErrorHandling:
 
         async def run_session():
             proc = await asyncio.create_subprocess_exec(
-                "uv",
-                "run",
-                "python",
+                sys.executable,
                 "-m",
                 "kilntainers",
                 stdin=asyncio.subprocess.PIPE,

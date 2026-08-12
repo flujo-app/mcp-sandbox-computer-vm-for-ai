@@ -13,7 +13,20 @@ def _discover_entry_points() -> dict[str, importlib.metadata.EntryPoint]:
     Entry points are not loaded (imported) at discovery time.
     """
     eps = importlib.metadata.entry_points(group="kilntainers.backends")
-    return {ep.name: ep for ep in eps}
+    discovered = {ep.name: ep for ep in eps}
+    # Source checkouts can be newer than an already-running editable install
+    # (especially on Windows, where the live CLI launcher cannot be replaced).
+    # Keep the built-in Fly backend discoverable without weakening third-party
+    # entry-point support.
+    discovered.setdefault(
+        "fly",
+        importlib.metadata.EntryPoint(
+            name="fly",
+            value="kilntainers.backends.fly:FlyBackend",
+            group="kilntainers.backends",
+        ),
+    )
+    return discovered
 
 
 # Discovered at import time (fast — no imports, just metadata scan)

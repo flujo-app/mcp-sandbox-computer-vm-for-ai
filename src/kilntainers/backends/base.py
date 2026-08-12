@@ -2,7 +2,8 @@
 
 import argparse
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from inspect import signature
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -27,6 +28,23 @@ class ExecResult:
     stderr: str
     exit_code: int
     exec_duration_ms: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ComputerInfo:
+    """Provider-neutral description of a managed sandbox computer."""
+
+    computer_id: str
+    sandbox_id: str
+    backend: str
+    state: str
+    temporary: bool
+    image: str | None = None
+    created_at: str | None = None
+
+    def to_dict(self) -> dict[str, str | bool | None]:
+        """Return a JSON-serializable representation for MCP responses."""
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -95,6 +113,20 @@ class Sandbox(ABC):
         HTTP mode. For Docker, this is the container ID (short form).
         """
         ...
+
+    @property
+    def computer_id(self) -> str:
+        """Stable human-facing ID used to reconnect to this computer.
+
+        Legacy backends do not expose a separate name, so their provider ID is
+        also used as the computer ID. Managed backends override this property.
+        """
+        return getattr(self, "_managed_computer_id", self.sandbox_id)
+
+    @property
+    def temporary(self) -> bool:
+        """Whether this computer should be removed when its MCP owner exits."""
+        return getattr(self, "_managed_temporary", True)
 
     @abstractmethod
     async def exec(self, request: ExecRequest) -> ExecResult:
@@ -213,17 +245,39 @@ class Backend(ABC):
         """
         ...
 
-    async def create_sandbox(self) -> Sandbox:
+    async def create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> Sandbox:
         """Create a new sandbox and return it ready to use.
 
         Auto-validates if validate() has not been called. Returns a
         ready-to-use Sandbox (readiness check already passed).
+
+        Managed backends use ``computer_id`` as a stable provider name and
+        ``temporary`` to select cleanup behavior. Legacy backends may ignore
+        both values while still participating in the in-process registry.
         """
         await self.validate()
-        return await self._create_sandbox()
+        parameters = signature(self._create_sandbox).parameters
+        if "computer_id" not in parameters:
+            # Compatibility for third-party backends built against the original
+            # no-argument _create_sandbox contract.
+            return await self._create_sandbox()  # type: ignore[call-arg]
+        return await self._create_sandbox(
+            computer_id=computer_id,
+            temporary=temporary,
+        )
 
     @abstractmethod
-    async def _create_sandbox(self) -> Sandbox:
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> Sandbox:
         """Implementation-specific sandbox creation. Override this method.
 
         Must perform the full startup sequence:
@@ -234,6 +288,30 @@ class Backend(ABC):
         Raise BackendError if startup fails at any step.
         """
         ...
+
+    async def attach_sandbox(self, computer_id: str) -> Sandbox | None:
+        """Attach to a provider computer created by an earlier process.
+
+        Backends with provider-side discovery (Docker and Fly Machines) should
+        override this. Returning ``None`` means no matching computer exists.
+        """
+        return None
+
+    async def list_computers(self) -> list[ComputerInfo]:
+        """List provider-side managed computers visible to this backend."""
+        return []
+
+    async def restart_computer(self, computer_id: str) -> Sandbox | None:
+        """Restart and reattach a managed computer, if supported."""
+        return None
+
+    async def delete_computer(self, computer_id: str) -> bool:
+        """Permanently delete a provider-side computer, if supported."""
+        return False
+
+    async def factory_reset_computer(self, computer_id: str) -> Sandbox | None:
+        """Recreate a managed computer from its configured base image."""
+        return None
 
     @abstractmethod
     def tool_instructions(self) -> str | None:

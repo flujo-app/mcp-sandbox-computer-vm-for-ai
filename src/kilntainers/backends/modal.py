@@ -204,7 +204,12 @@ class ModalBackend(Backend):
         else:
             return modal_sdk.Image.from_registry(self._config.image)
 
-    async def _create_sandbox(self) -> ModalSandbox:
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> ModalSandbox:
         """Create a Modal sandbox.
 
         Performs the full startup sequence:

@@ -201,7 +201,12 @@ class WasmBackend(Backend):
         )
         self._epoch_ticker_thread.start()
 
-    async def _create_sandbox(self) -> "WasmSandbox":
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> "WasmSandbox":
         """Create a WASM sandbox.
 
         Performs the full startup sequence:

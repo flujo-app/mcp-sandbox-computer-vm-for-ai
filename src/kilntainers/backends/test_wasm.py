@@ -449,7 +449,7 @@ class TestWasmBackendSandboxCreation:
         sandbox._verify_readiness = mock_verify  # type: ignore[method-assign]
 
         # Monkey patch _create_sandbox to return our test sandbox
-        async def mock_create():
+        async def mock_create(*, computer_id=None, temporary=True):
             return sandbox
 
         original_create = backend._create_sandbox

@@ -1,6 +1,6 @@
 # Kilntainers: Secure Agent Sandboxes
 
-Kilntainers is an MCP server that gives LLM agents isolated Linux sandboxes for executing shell commands. It exposes a single tool — `sandbox_exec` — providing the full power of a Linux command line in an ephemeral, secure environment.
+This fork extends Kilntainers into named sandbox computers. `sandbox_exec` supports stable computer IDs and temporary/permanent lifecycles; provider-neutral management tools and a stable MCP App dashboard manage Docker containers and Fly Machines.
 
 ## Specs
 

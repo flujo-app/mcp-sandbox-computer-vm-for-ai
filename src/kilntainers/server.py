@@ -12,9 +12,18 @@ from mcp.server.fastmcp import Context, FastMCP
 from mcp.server.session import ServerSession
 from mcp.types import CallToolResult, TextContent
 from pydantic import Field
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from kilntainers.backends.base import Backend, ExecRequest, Sandbox
+from kilntainers.computers import ComputerRegistry, random_computer_id
 from kilntainers.config import ServerConfig
+from kilntainers.dashboard import (
+    DASHBOARD_MIME_TYPE,
+    DASHBOARD_RESOURCE_META,
+    DASHBOARD_URI,
+    dashboard_html,
+)
 from kilntainers.errors import BackendError, SandboxDiedError
 
 # Constants
@@ -38,6 +47,7 @@ class SessionContext:
         backend: Backend,
         transport: str,
         death_callback: Callable[[], None] | None = None,
+        registry: ComputerRegistry | None = None,
     ) -> None:
         """Initialize the session context.
 
@@ -47,23 +57,45 @@ class SessionContext:
             death_callback: Optional callback for sandbox death in stdio mode.
         """
         self._backend = backend
+        self._registry = registry or ComputerRegistry(backend)
         self._transport = transport
         self._death_callback = death_callback
-        self._sandbox: Sandbox | None = None
-        self._death_task: asyncio.Task[None] | None = None
+        self._default_computer_id: str | None = None
+        self._current_computer_id: str | None = None
+        self._owned_computers: dict[str, bool] = {}
+        self._death_tasks: dict[str, asyncio.Task[None]] = {}
         self._lock = asyncio.Lock()
 
     @property
     def sandbox(self) -> Sandbox | None:
-        """The sandbox, or None if not yet created. Read-only."""
-        return self._sandbox
+        """The most recently selected sandbox, or None before first use."""
+        if self._current_computer_id is None:
+            return None
+        return self._registry.peek(self._current_computer_id)
 
     @property
     def death_task(self) -> asyncio.Task[None] | None:
-        """The death monitor task, or None if sandbox not yet created."""
-        return self._death_task
+        """The current computer's death monitor, if one has been created."""
+        if self._current_computer_id is None:
+            return None
+        return self._death_tasks.get(self._current_computer_id)
 
-    async def get_or_create_sandbox(self) -> Sandbox:
+    @property
+    def current_computer_id(self) -> str | None:
+        """Stable ID of the computer most recently used by this session."""
+        return self._current_computer_id
+
+    @property
+    def registry(self) -> ComputerRegistry:
+        """Shared computer registry used by management tool handlers."""
+        return self._registry
+
+    async def get_or_create_sandbox(
+        self,
+        computer_id: str | None = None,
+        *,
+        temporary: bool = True,
+    ) -> Sandbox:
         """Get the sandbox, creating it lazily on first call.
 
         Concurrency-safe: uses asyncio.Lock to ensure only one sandbox
@@ -76,18 +108,36 @@ class SessionContext:
             BackendError: If sandbox creation fails. The next call
                 will retry creation.
         """
-        if self._sandbox is not None:
-            return self._sandbox
         async with self._lock:
-            # Double-check after acquiring lock
-            if self._sandbox is not None:
-                return self._sandbox
-            sandbox = await self._backend.create_sandbox()
-            self._start_death_monitor(sandbox)
-            self._sandbox = sandbox
+            target_id = computer_id
+            if target_id is None and self._default_computer_id is not None:
+                target_id = self._default_computer_id
+                temporary = self._owned_computers[target_id]
+
+            if target_id is not None and target_id in self._owned_computers:
+                existing = await self._registry.get_owned(target_id)
+                if existing is not None:
+                    if self._owned_computers[target_id] != temporary:
+                        raise BackendError(
+                            f"Computer '{target_id}' is already attached with "
+                            f"temporary={str(self._owned_computers[target_id]).lower()}."
+                        )
+                    self._current_computer_id = target_id
+                    return existing
+
+            assigned_id, sandbox = await self._registry.acquire(
+                target_id,
+                temporary=temporary,
+                add_owner=True,
+            )
+            self._owned_computers[assigned_id] = sandbox.temporary
+            self._current_computer_id = assigned_id
+            if computer_id is None and self._default_computer_id is None:
+                self._default_computer_id = assigned_id
+            self._start_death_monitor(assigned_id, sandbox)
             return sandbox
 
-    def _start_death_monitor(self, sandbox: Sandbox) -> None:
+    def _start_death_monitor(self, computer_id: str, sandbox: Sandbox) -> None:
         """Start monitoring sandbox for unexpected death."""
 
         async def _monitor_death() -> None:
@@ -106,21 +156,81 @@ class SessionContext:
                 else:
                     os.kill(os.getpid(), signal.SIGTERM)
 
-        self._death_task = asyncio.create_task(_monitor_death())
+        self._death_tasks[computer_id] = asyncio.create_task(_monitor_death())
+
+    async def _cancel_death_monitor(self, computer_id: str) -> None:
+        task = self._death_tasks.pop(computer_id, None)
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def restart_computer(self, computer_id: str) -> Sandbox:
+        """Restart through the registry and refresh any session death monitor."""
+        await self._cancel_death_monitor(computer_id)
+        sandbox = await self._registry.restart(computer_id)
+        if computer_id in self._owned_computers:
+            self._start_death_monitor(computer_id, sandbox)
+        self._current_computer_id = computer_id
+        return sandbox
+
+    async def factory_reset_computer(self, computer_id: str) -> Sandbox:
+        """Factory-reset through the registry and refresh monitoring."""
+        await self._cancel_death_monitor(computer_id)
+        sandbox = await self._registry.factory_reset(computer_id)
+        if computer_id in self._owned_computers:
+            self._start_death_monitor(computer_id, sandbox)
+        self._current_computer_id = computer_id
+        return sandbox
+
+    async def delete_computer(self, computer_id: str) -> None:
+        """Delete through the registry and detach it from this session."""
+        await self._cancel_death_monitor(computer_id)
+        await self._registry.delete(computer_id)
+        self._owned_computers.pop(computer_id, None)
+        if self._current_computer_id == computer_id:
+            self._current_computer_id = None
+        if self._default_computer_id == computer_id:
+            self._default_computer_id = None
 
     async def cleanup(self) -> None:
         """Clean up resources. Called by lifespan on exit.
 
         Safe to call even if no sandbox was ever created (no-op).
         """
-        if self._death_task is not None:
-            self._death_task.cancel()
+        for task in self._death_tasks.values():
+            task.cancel()
+        for task in self._death_tasks.values():
             try:
-                await self._death_task
+                await task
             except asyncio.CancelledError:
                 pass
-        if self._sandbox is not None:
-            await self._sandbox.stop()
+        for computer_id in list(self._owned_computers):
+            await self._registry.release(computer_id)
+
+
+def _result(
+    payload: dict[str, Any],
+    *,
+    is_error: bool = False,
+) -> CallToolResult:
+    """Create an MCP result with JSON fallback and structured app data."""
+    return CallToolResult(
+        content=[TextContent(type="text", text=json.dumps(payload))],
+        isError=is_error,
+        structuredContent=payload,
+    )
+
+
+def _session_from_context(
+    ctx: Context[ServerSession, SessionContext] | None,
+) -> SessionContext | None:
+    if ctx is None:
+        return None
+    return ctx.request_context.lifespan_context
 
 
 # --- Tool Description Assembly ---
@@ -187,6 +297,7 @@ def create_lifespan(
     transport: str,
     *,
     death_callback: Callable[[], None] | None = None,
+    registry: ComputerRegistry | None = None,
 ) -> Callable[[FastMCP], AsyncContextManager[SessionContext]]:
     """Create a lifespan context manager for the given transport.
 
@@ -212,6 +323,7 @@ def create_lifespan(
             backend=backend,
             transport=transport,
             death_callback=death_callback,
+            registry=registry,
         )
         try:
             yield ctx
@@ -289,6 +401,8 @@ def _create_handler(config: ServerConfig) -> Callable[..., Any]:
         stdin: str | None = None,
         working_directory: str | None = None,
         timeout: int | None = None,
+        computer_id: str | None = None,
+        temporary: bool = True,
         ctx: Context[ServerSession, SessionContext] | None = None,
     ) -> CallToolResult:
         """Handle a sandbox_exec tool call.
@@ -336,7 +450,10 @@ def _create_handler(config: ServerConfig) -> Callable[..., Any]:
 
         # --- Lazy sandbox creation ---
         try:
-            sandbox = await session_context.get_or_create_sandbox()
+            sandbox = await session_context.get_or_create_sandbox(
+                computer_id=computer_id,
+                temporary=temporary,
+            )
         except BackendError as e:
             return CallToolResult(
                 content=[TextContent(type="text", text=str(e))],
@@ -363,21 +480,258 @@ def _create_handler(config: ServerConfig) -> Callable[..., Any]:
             )
 
         # --- Format response ---
-        response_json = json.dumps(
-            {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "exit_code": result.exit_code,
-                "exec_duration_ms": result.exec_duration_ms,
-            }
-        )
+        response = {
+            "computer_id": session_context.current_computer_id,
+            "temporary": sandbox.temporary,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "exit_code": result.exit_code,
+            "exec_duration_ms": result.exec_duration_ms,
+        }
+        response_json = json.dumps(response)
 
         return CallToolResult(
             content=[TextContent(type="text", text=response_json)],
             isError=False,
+            structuredContent=response,
         )
 
     return sandbox_exec_handler
+
+
+def _computer_ui_meta(*, launcher: bool = False) -> dict[str, Any]:
+    ui: dict[str, Any] = {"visibility": ["model", "app"]}
+    if launcher:
+        ui["resourceUri"] = DASHBOARD_URI
+    return {"ui": ui}
+
+
+def _register_computer_tools(mcp: FastMCP, config: ServerConfig) -> None:
+    """Register provider-neutral lifecycle tools used by models and the App."""
+
+    async def inventory(session: SessionContext) -> dict[str, Any]:
+        computers = await session.registry.list()
+        return {
+            "computers": [computer.to_dict() for computer in computers],
+            "count": len(computers),
+        }
+
+    async def computer_dashboard(
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """Open the interactive sandbox computer dashboard."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            return _result(await inventory(session))
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    async def computer_list(
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """List temporary and permanent computers managed by this backend."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            return _result(await inventory(session))
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    async def computer_create(
+        computer_id: Annotated[
+            str,  # noqa: RUF013
+            Field(
+                description=(
+                    "Optional lowercase slug. Omit to generate a readable random ID."
+                )
+            ),
+        ] = None,  # type: ignore
+        temporary: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Remove on MCP session shutdown when true; persist and allow "
+                    "reattachment by ID when false."
+                )
+            ),
+        ] = True,
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """Create or attach to a named sandbox computer."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            requested_id = computer_id or random_computer_id()
+            sandbox = await session.get_or_create_sandbox(
+                computer_id=requested_id,
+                temporary=temporary,
+            )
+            return _result(
+                {
+                    "ok": True,
+                    "computer_id": session.current_computer_id,
+                    "sandbox_id": sandbox.sandbox_id,
+                    "temporary": sandbox.temporary,
+                }
+            )
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    async def computer_restart(
+        computer_id: Annotated[str, Field(description="Computer slug to restart")],
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """Restart a computer while preserving its writable filesystem."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            sandbox = await session.restart_computer(computer_id)
+            return _result(
+                {
+                    "ok": True,
+                    "computer_id": computer_id,
+                    "sandbox_id": sandbox.sandbox_id,
+                    "temporary": sandbox.temporary,
+                }
+            )
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    async def computer_factory_reset(
+        computer_id: Annotated[
+            str,
+            Field(description="Computer slug whose writable state will be erased"),
+        ],
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """Erase a computer's writable state and recreate it from its base image."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            sandbox = await session.factory_reset_computer(computer_id)
+            return _result(
+                {
+                    "ok": True,
+                    "computer_id": computer_id,
+                    "sandbox_id": sandbox.sandbox_id,
+                    "temporary": sandbox.temporary,
+                }
+            )
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    async def computer_delete(
+        computer_id: Annotated[
+            str,
+            Field(description="Computer slug to permanently delete"),
+        ],
+        ctx: Context[ServerSession, SessionContext] | None = None,
+    ) -> CallToolResult:
+        """Permanently delete a computer and its writable filesystem."""
+        session = _session_from_context(ctx)
+        if session is None:
+            return _result(
+                {"error": "Internal error: no context provided"}, is_error=True
+            )
+        try:
+            await session.delete_computer(computer_id)
+            return _result({"ok": True, "computer_id": computer_id, "deleted": True})
+        except BackendError as error:
+            return _result({"error": str(error)}, is_error=True)
+
+    mcp.add_tool(
+        computer_dashboard,
+        name="computer_dashboard",
+        title="Sandbox Computer Dashboard",
+        description=(
+            "Open the interactive MCP App dashboard for listing computers, "
+            "running terminal commands, restarting, factory-resetting, and deleting."
+        ),
+        meta=_computer_ui_meta(launcher=True),
+    )
+    mcp.add_tool(
+        computer_list,
+        name="computer_list",
+        description="List all sandbox computers managed by the selected backend.",
+        meta=_computer_ui_meta(),
+    )
+    mcp.add_tool(
+        computer_create,
+        name="computer_create",
+        description=(
+            "Create a temporary or permanent sandbox computer. If computer_id is "
+            "omitted, a readable random slug is returned."
+        ),
+        meta=_computer_ui_meta(),
+    )
+    mcp.add_tool(
+        computer_restart,
+        name="computer_restart",
+        description="Restart a computer without erasing its writable filesystem.",
+        meta=_computer_ui_meta(),
+    )
+    mcp.add_tool(
+        computer_factory_reset,
+        name="computer_factory_reset",
+        description=(
+            "Erase a computer's writable filesystem and recreate it from the base image."
+        ),
+        meta=_computer_ui_meta(),
+    )
+    mcp.add_tool(
+        computer_delete,
+        name="computer_delete",
+        description="Permanently delete a computer and all of its writable state.",
+        meta=_computer_ui_meta(),
+    )
+
+    @mcp.resource(
+        DASHBOARD_URI,
+        name="Sandbox Computer Dashboard",
+        title="Sandbox Computer Dashboard",
+        description="Interactive lifecycle and terminal dashboard for sandbox computers.",
+        mime_type=DASHBOARD_MIME_TYPE,
+        meta=DASHBOARD_RESOURCE_META,
+    )
+    def computer_dashboard_resource() -> str:
+        return dashboard_html()
+
+
+def _enable_mcp_apps_capability(mcp: FastMCP) -> None:
+    """Advertise the stable MCP Apps extension missing from MCP SDK 1.x types."""
+    from mcp.types import ServerCapabilities
+
+    low_level_server = mcp._mcp_server
+    original = low_level_server.get_capabilities
+
+    def get_capabilities_with_apps(
+        notification_options: Any,
+        experimental_capabilities: dict[str, dict[str, Any]],
+    ) -> ServerCapabilities:
+        capabilities = original(notification_options, experimental_capabilities)
+        payload = capabilities.model_dump(by_alias=True, exclude_none=True)
+        payload["extensions"] = {
+            "io.modelcontextprotocol/ui": {"mimeTypes": [DASHBOARD_MIME_TYPE]}
+        }
+        return ServerCapabilities.model_validate(payload)
+
+    setattr(low_level_server, "get_capabilities", get_capabilities_with_apps)
 
 
 # --- Server Factory ---
@@ -407,7 +761,8 @@ def create_server(
     )
 
     # Create lifespan that captures the backend and transport
-    lifespan = create_lifespan(backend, config.transport)
+    registry = ComputerRegistry(backend)
+    lifespan = create_lifespan(backend, config.transport, registry=registry)
 
     # Create server
     mcp = FastMCP(
@@ -416,6 +771,21 @@ def create_server(
         host=config.host,
         port=config.port,
     )
+
+    @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
+    async def healthz(request: Request) -> JSONResponse:
+        return JSONResponse({"status": "ok"})
+
+    @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
+    async def service_info(request: Request) -> JSONResponse:
+        return JSONResponse(
+            {
+                "name": "mcp-sandbox-computer-vm-for-ai",
+                "mcp_endpoint": "/mcp",
+                "dashboard_resource": DASHBOARD_URI,
+                "health": "/healthz",
+            }
+        )
 
     handler = _create_handler(config)
 
@@ -441,6 +811,24 @@ def create_server(
             int,  # noqa: RUF013
             Field(description="Timeout in seconds (defaults to server config)."),
         ] = None,  # type: ignore
+        computer_id: Annotated[
+            str,  # noqa: RUF013
+            Field(
+                description=(
+                    "Stable computer slug. Omit to create and select a readable "
+                    "random ID for this MCP session."
+                )
+            ),
+        ] = None,  # type: ignore
+        temporary: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Remove the computer when its MCP session shuts down. Set "
+                    "false to keep it provider-side and reconnect by computer_id."
+                )
+            ),
+        ] = True,
         ctx: Context[ServerSession, SessionContext] | None = None,
     ) -> CallToolResult:
         return await handler(
@@ -449,6 +837,8 @@ def create_server(
             stdin=stdin,
             working_directory=working_directory,
             timeout=timeout,
+            computer_id=computer_id,
+            temporary=temporary,
             ctx=ctx,
         )
 
@@ -456,6 +846,10 @@ def create_server(
         sandbox_exec,
         name="sandbox_exec",
         description=description,
+        meta=_computer_ui_meta(),
     )
+
+    _register_computer_tools(mcp, config)
+    _enable_mcp_apps_capability(mcp)
 
     return mcp

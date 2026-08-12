@@ -297,7 +297,7 @@ async def test_response_json_contains_all_fields(
     mock_context: MagicMock,
     server_config: ServerConfig,
 ) -> None:
-    """Response JSON contains all four fields."""
+    """Response JSON contains execution and computer identity fields."""
     handler = _create_handler(server_config)
 
     mock_context.request_context.lifespan_context.sandbox.exec_results.append(
@@ -313,6 +313,8 @@ async def test_response_json_contains_all_fields(
     response_json = json.loads(result.content[0].text)
 
     assert set(response_json.keys()) == {
+        "computer_id",
+        "temporary",
         "stdout",
         "stderr",
         "exit_code",
@@ -322,6 +324,8 @@ async def test_response_json_contains_all_fields(
     assert response_json["stderr"] == "err"
     assert response_json["exit_code"] == 0
     assert response_json["exec_duration_ms"] == 42
+    assert isinstance(response_json["computer_id"], str)
+    assert response_json["temporary"] is True
 
 
 # --- Handler Error Response Tests ---
