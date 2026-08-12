@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url";
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 run(process.execPath, ["scripts/sync-version.mjs", "--check"]);
+const virtualenvPython = path.join(
+  root,
+  ".venv",
+  process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+);
+if (!existsSync(virtualenvPython)) {
+  run("uv", ["sync", "--all-extras", "--dev"]);
+}
 run("uvx", [
   "ruff",
   "check",
@@ -18,14 +26,6 @@ run("uvx", [
 ]);
 const productionModules = pythonModules(path.join(root, "src", "kilntainers"));
 run("uvx", ["ty", "check", ...productionModules]);
-const virtualenvPython = path.join(
-  root,
-  ".venv",
-  process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-);
-if (!existsSync(virtualenvPython)) {
-  run("uv", ["sync", "--all-extras", "--dev"]);
-}
 run(virtualenvPython, [
   "-m",
   "pytest",
