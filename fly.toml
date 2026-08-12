@@ -1,5 +1,5 @@
 app = "mcp-sandbox-computer-vm-for-ai"
-primary_region = "bog"
+primary_region = "gru"
 
 [build]
   dockerfile = "Dockerfile"

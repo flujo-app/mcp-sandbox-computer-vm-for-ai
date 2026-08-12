@@ -151,6 +151,8 @@ fly deploy
 
 The MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`. Configure the same `KILNTAINERS_AUTH_TOKEN` as a bearer header in the MCP client. `fly.toml` keeps the controller Machine running because it owns MCP sessions and cleanup; sandbox Machines are standalone Machines distinguished by Kilntainers metadata and are not part of the controller process group.
 
+The included `fly.toml` defaults to Fly's São Paulo region (`gru`). Change `primary_region` and, when needed, `FLY_REGION` if you want the controller and newly created sandbox Machines in another supported region.
+
 ### Cloud Containers & VMs
 
 #### Modal.com
