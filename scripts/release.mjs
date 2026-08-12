@@ -37,6 +37,7 @@ if (!/^(patch|minor|major|\d+\.\d+\.\d+)$/.test(bump)) {
 if (checkOnly) {
   run("uv", ["--version"]);
   run("gh", ["--version"]);
+  runNpm(["--version"]);
   run(process.execPath, ["scripts/sync-version.mjs", "--check"]);
   console.log("Release command self-check passed.");
   process.exit(0);
@@ -209,6 +210,13 @@ function git(arguments_) {
 }
 
 function runNpm(arguments_) {
+  // npm is a shell shim on Windows, which breaks arguments containing spaces
+  // (such as the version commit message). Re-enter npm through its JS CLI when
+  // this script was launched by `npm run`, preserving the argument boundaries.
+  if (process.env.npm_execpath) {
+    run(process.execPath, [process.env.npm_execpath, ...arguments_]);
+    return;
+  }
   run("npm", arguments_, { shell: process.platform === "win32" });
 }
 
