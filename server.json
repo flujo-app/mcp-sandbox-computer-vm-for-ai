@@ -3,7 +3,7 @@
   "name": "io.github.flujo-app/mcp-sandbox-computer-vm-for-ai",
   "title": "MCP Sandbox Computer VM for AI",
   "description": "Named Docker and Fly Machine sandbox computers with an interactive MCP App dashboard.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "repository": {
     "url": "https://github.com/flujo-app/mcp-sandbox-computer-vm-for-ai",
     "source": "github"
@@ -13,7 +13,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "mcp-sandbox-computer-vm-for-ai",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"

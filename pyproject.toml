@@ -1,6 +1,6 @@
 [project]
 name = "mcp-sandbox-computer-vm-for-ai"
-version = "0.2.1"
+version = "0.2.2"
 description = "Named Docker and Fly Machine sandbox computers with an MCP App dashboard"
 authors = [
   {name = "Steve Cosman, Chesterfield Laboratories Inc", email = "scosman@users.noreply.github.com"}

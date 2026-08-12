@@ -739,7 +739,7 @@ wheels = [
 
 [[package]]
 name = "mcp-sandbox-computer-vm-for-ai"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "." }
 dependencies = [
     { name = "e2b" },
