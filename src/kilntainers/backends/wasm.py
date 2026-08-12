@@ -167,7 +167,7 @@ class WasmBackend(Backend):
         if wasmtime is None:
             raise BackendError(
                 "WASM backend requires the 'wasmtime' package. "
-                "Install with: uv add kilntainers[wasm]"
+                "Install with: uv add mcp-sandbox-computer-vm-for-ai[wasm]"
             )
 
         # Check .wasm file exists

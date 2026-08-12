@@ -13,12 +13,14 @@
 <p align="center">
   <a href="https://github.com/Kiln-AI/kilntainers/actions/workflows/build_and_test.yml"><img src="https://github.com/Kiln-AI/kilntainers/actions/workflows/build_and_test.yml/badge.svg" alt="Build and Test"></a>
   <a href="https://github.com/Kiln-AI/kilntainers/actions/workflows/test_count.yml"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/scosman/9f8457cc9d44ab16ff8b9f1a977d25bb/raw/test_count_kiln.json" alt="Test Count Badge"></a>
-<a href="https://pypi.org/project/kilntainers/"><img src="https://img.shields.io/pypi/v/kilntainers.svg?logo=pypi&label=PyPI&logoColor=gold" alt="PyPi"></a>
+  <a href="https://pypi.org/project/mcp-sandbox-computer-vm-for-ai/"><img src="https://img.shields.io/pypi/v/mcp-sandbox-computer-vm-for-ai.svg?logo=pypi&label=PyPI&logoColor=gold" alt="PyPI"></a>
   <a href="https://kiln.tech/discord"><img src="https://img.shields.io/badge/Discord-Kiln_AI-blue?logo=Discord&logoColor=white" alt="Discord"></a>
   <a href="https://kiln.tech/blog"><img src="https://img.shields.io/badge/Newsletter-subscribe-blue?logo=mailboxdotorg&logoColor=white" alt="Newsletter"></a>
 </p>
 
 MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](https://github.com/Kiln-AI/Kilntainers). It gives agents isolated Linux computers, stable IDs, temporary or persistent lifecycles, an interactive MCP App dashboard, and first-class Docker and Fly Machines backends.
+
+<!-- mcp-name: io.github.flujo-app/mcp-sandbox-computer-vm-for-ai -->
 
 - 🖥️ **MCP App dashboard:** List computers, run commands, restart, factory reset, and delete from FLUJO or another stable MCP Apps host.
 - 🏷️ **Named computers:** Reconnect with a stable `computer_id`, or omit it to receive a readable random slug.
@@ -182,7 +184,7 @@ Authenticate with `--e2b-api-key` CLI arg, or `E2B_API_KEY` environment variable
 Runs [go-busybox](https://github.com/rcarmo/go-busybox) in a WebAssembly sandbox. Not a full Linux environment, but provides common utilities (`grep`, `awk`, `sed`, `ls`, `wc`, `sort`, etc.) in a very lightweight and secure sandbox.
 
 ```bash
-uv tool install kilntainers[wasm]  # WASM support is an optional dependency (+15MB)
+uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # optional WASM support (+15MB)
 kilntainers --backend go_busybox
 ```
 
@@ -191,19 +193,41 @@ kilntainers --backend go_busybox
 Run a custom WASM module as the sandbox backend. Provides agents a set tools compiled to WebAssembly, and an isolated filesystem.
 
 ```bash
-uv tool install kilntainers[wasm]  # WASM support is an optional dependency (+15MB)
+uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # optional WASM support (+15MB)
 kilntainers --backend wasm --wasm-path ./my_tool.wasm
 ```
 
 ## Installation
 
 ```bash
-uv tool install kilntainers        # recommended
-uv tool install kilntainers[wasm]  # optional, include WASM backends (+15MB)
-pip install kilntainers            # also works with pip
+uv tool install mcp-sandbox-computer-vm-for-ai        # recommended
+uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # include WASM backends (+15MB)
+pip install mcp-sandbox-computer-vm-for-ai            # also works with pip
 ```
 
 Requires Python 3.13+. Docker backend requires Docker or Podman. The Modal and E2B backends require accounts to those services.
+
+## Releasing
+
+Node is used only as the cross-platform release task runner; the published package remains Python. Release metadata is synchronized across `package.json`, `pyproject.toml`, `uv.lock`, `server.json`, and `kilntainers.__version__`.
+
+```bash
+npm run release:check                 # credential-free command self-check
+npm run check                         # lint, types, tests, and package build
+npm run release -- --dry-run          # full main-branch preflight, no changes
+npm run release                       # patch version, publish PyPI, tag and GitHub release
+npm run release -- minor              # minor version release
+npm run release -- 1.0.0              # exact version release
+```
+
+Local PyPI publication requires `UV_PUBLISH_TOKEN` (or `UV_PUBLISH_USERNAME` and `UV_PUBLISH_PASSWORD`). After the PyPI version is visible, validate and publish its immutable metadata to the official MCP Registry:
+
+```bash
+npm run registry:validate             # downloads pinned publisher; publishes nothing
+npm run registry:release              # GitHub login, then publish server.json
+```
+
+The registry command verifies the published PyPI README ownership marker before authenticating. `mcp:validate` and `mcp:publish` are retained as aliases matching the sibling MCP App repositories.
 
 ## CLI Reference
 
