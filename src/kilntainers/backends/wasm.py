@@ -38,7 +38,7 @@ def _ensure_windows_processor_architecture() -> None:
         os.environ["PROCESSOR_ARCHITECTURE"] = architecture
         # A failed WMI query may already have cached an empty machine value.
         # Clear it so Wasmtime's platform.machine() call uses the fallback.
-        platform._uname_cache = None  # ty: ignore[unresolved-attribute]
+        setattr(platform, "_uname_cache", None)
 
 
 _ensure_windows_processor_architecture()
