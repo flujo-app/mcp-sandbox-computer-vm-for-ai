@@ -1,6 +1,6 @@
 {
   "name": "mcp-sandbox-computer-vm-for-ai-release-tools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Release tooling for the mcp-sandbox-computer-vm-for-ai Python package",
   "type": "module",
