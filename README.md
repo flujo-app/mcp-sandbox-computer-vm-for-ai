@@ -215,12 +215,14 @@ Node is used only as the cross-platform release task runner; the published packa
 npm run release:check                 # credential-free command self-check
 npm run check                         # lint, types, tests, and package build
 npm run release -- --dry-run          # full main-branch preflight, no changes
-npm run release                       # patch version, publish PyPI, tag and GitHub release
+npm run release                       # patch version; GitHub publishes PyPI via OIDC
 npm run release -- minor              # minor version release
 npm run release -- 1.0.0              # exact version release
 ```
 
-Local PyPI publication requires `UV_PUBLISH_TOKEN` (or `UV_PUBLISH_USERNAME` and `UV_PUBLISH_PASSWORD`). After the PyPI version is visible, validate and publish its immutable metadata to the official MCP Registry:
+PyPI publication uses [Trusted Publishing](https://docs.pypi.org/trusted-publishers/), so no PyPI token is stored locally or in GitHub. Configure the PyPI publisher once with owner `flujo-app`, repository `mcp-sandbox-computer-vm-for-ai`, workflow `release.yml`, and environment `pypi`. The release command pushes the version commit and tag, dispatches `.github/workflows/release.yml`, and waits for PyPI and the GitHub Release.
+
+After the PyPI version is visible, validate and publish its immutable metadata to the official MCP Registry:
 
 ```bash
 npm run registry:validate             # downloads pinned publisher; publishes nothing
