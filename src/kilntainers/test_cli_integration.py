@@ -48,6 +48,7 @@ class TestCLIStartup:
         assert "--image" in help_text
         assert "--shell" in help_text
         assert "--network" in help_text
+        assert "--no-network" in help_text
         assert "--docker-run-flag" in help_text
 
         # Check for HTTP-only args (present in help even though they error in stdio mode)

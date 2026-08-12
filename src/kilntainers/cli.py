@@ -105,9 +105,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     core.add_argument(
         "--network",
-        action="store_true",
-        default=False,
-        help="Enable network access in sandboxes (default: disabled)",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable network access in sandboxes (default: enabled)",
     )
 
     # --- Tool description ---

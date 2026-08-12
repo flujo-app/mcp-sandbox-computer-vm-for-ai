@@ -122,7 +122,8 @@ Local containers via Docker or Podman. Any OCI image works.
 ```bash
 kilntainers                                     # Docker + debian-slim (defaults)
 kilntainers --image alpine --engine podman      # Podman + Alpine
-kilntainers --image node:22 --network           # Node.js with networking
+kilntainers --image node:22                     # Node.js with networking
+kilntainers --no-network                        # Explicitly disable networking
 ```
 
 ### Docker Compose dashboard server
@@ -258,7 +259,8 @@ core options:
   --allow-unauthenticated-http
                         Explicitly allow a non-loopback listener without built-in auth
   --shell SHELL         Shell binary for command mode (e.g., /bin/bash, ash). Default: /bin/bash.
-  --network             Enable network access in sandboxes (default: disabled)
+  --network, --no-network
+                        Enable network access in sandboxes (default: enabled)
 
 tool description:
   --tool-instruction-override TOOL_INSTRUCTION_OVERRIDE

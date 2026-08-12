@@ -42,7 +42,7 @@ def test_parser_defaults():
     assert args.engine == "docker"
     assert args.image == "debian:bookworm-slim"
     assert args.shell == "/bin/bash"
-    assert args.network is False
+    assert args.network is True
     assert args.cpu is None
     assert args.memory is None
     assert args.docker_run_flags is None
@@ -187,7 +187,7 @@ def test_build_configs_default_args():
     assert docker_config.engine == "docker"
     assert docker_config.image == "debian:bookworm-slim"
     assert docker_config.shell == "/bin/bash"
-    assert docker_config.network_enabled is False
+    assert docker_config.network_enabled is True
     assert docker_config.cpu is None
     assert docker_config.memory is None
     assert docker_config.docker_run_flags == []
@@ -281,6 +281,17 @@ def test_build_configs_network_flag():
     docker_config = cast(DockerBackendConfig, docker_config)
 
     assert docker_config.network_enabled is True
+
+
+def test_build_configs_no_network_flag():
+    """Test that --no-network explicitly disables network access."""
+    parser = build_parser()
+    args = parser.parse_args(["--no-network"])
+
+    _server_config, docker_config = build_configs(args)
+    docker_config = cast(DockerBackendConfig, docker_config)
+
+    assert docker_config.network_enabled is False
 
 
 # ================

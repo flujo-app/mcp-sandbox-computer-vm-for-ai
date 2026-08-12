@@ -44,13 +44,17 @@ Decisions made during planning, with rationale. This is the source of truth for 
 
 ---
 
-## D5: Network Disabled by Default -- Keep It
+## D5: Network Enabled by Default
 
-**Decision:** `network_enabled` defaults to `false`. Users must explicitly opt in.
+**Decision:** The MCP server sets `network_enabled` to `true` by default. Users can
+explicitly opt out with `--no-network`.
 
-**Rationale:** This is the safe default. The primary security concern (agent exfiltrating secrets via network) is real. Users who need network access (package installation, API calls) can enable it at startup.
+**Rationale:** Most practical agent tasks need network access for package installation,
+API calls, and downloads. Operators handling untrusted data or secrets can explicitly
+disable it at startup.
 
-**Implication:** Base image strategy matters more -- if the agent can't install packages, the image must include common tools. This is acceptable because custom images are already supported.
+**Implication:** Operators must treat sandbox network access as part of the threat model
+and use `--no-network` when isolation is required.
 
 ---
 

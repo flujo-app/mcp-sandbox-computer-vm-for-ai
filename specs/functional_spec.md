@@ -158,7 +158,7 @@ Kilntainers is configured through CLI parameters at startup. One server instance
 | `--transport` | string | `stdio` | MCP transport: `stdio` or `http`. |
 | `--host` | string | `127.0.0.1` | HTTP bind address (HTTP mode only). |
 | `--port` | integer | `8435` | HTTP listen port (HTTP mode only). |
-| `--network` | flag | disabled | Enable network access in sandboxes. (D5) |
+| `--network` / `--no-network` | boolean flag | enabled | Enable or disable network access in sandboxes. (D5) |
 | `--timeout` | integer (sec) | `120` | Default exec timeout. (D25) |
 | `--output-limit` | integer (bytes) | `2097152` | Max combined stdout+stderr per exec. (D24) |
 | `--extended-tool-instruction` | string | — | Appended to backend's tool description. (D16) |
@@ -434,7 +434,7 @@ The simplest possible invocation. Everything uses defaults.
 kilntainers
 ```
 
-**Effective configuration:** Docker backend, `debian:bookworm-slim` image, bash shell, network disabled, 120s timeout, 2 MiB output limit, stdio transport.
+**Effective configuration:** Docker backend, `debian:bookworm-slim` image, bash shell, network enabled, 120s timeout, 2 MiB output limit, stdio transport.
 
 **Tool description seen by the LLM:**: See above example in §7
 
@@ -450,7 +450,7 @@ Same as zero config, but using Podman instead of Docker. The only change is `--e
 kilntainers --engine podman
 ```
 
-**Effective configuration:** Docker backend with Podman engine, `debian:bookworm-slim` image, bash shell, network disabled, 120s timeout, 2 MiB output limit, stdio transport. All subprocess calls invoke `podman` instead of `docker`.
+**Effective configuration:** Docker backend with Podman engine, `debian:bookworm-slim` image, bash shell, network enabled, 120s timeout, 2 MiB output limit, stdio transport. All subprocess calls invoke `podman` instead of `docker`.
 
 **Tool description seen by the LLM:** Identical to §7 — the container engine is an implementation detail invisible to the agent.
 
@@ -536,14 +536,14 @@ kilntainers \
 |---|---|
 | **Process isolation** | The agent calls into the sandbox; it does not run inside it. No agent credentials need to exist in the sandbox. |
 | **Ephemeral** | Sandboxes are destroyed on disconnect. No persistent state to compromise. |
-| **Network isolation** | Network disabled by default. Prevents exfiltration of any data the agent writes into the sandbox. Opt-in via `--network`. (D5) |
+| **Network control** | Network enabled by default for practical agent workloads. Disable it with `--no-network` when sandbox network isolation is required. (D5) |
 | **Host isolation** | No host filesystem mounts by default. The sandbox cannot access host files or resources. |
 
 ### 9.2 Threat Model
 
 | Threat | Mitigation |
 |---|---|
-| **Data exfiltration** — agent writes a secret into the sandbox, then sends it over the network | Network disabled by default. When enabled, the operator accepts this risk. |
+| **Data exfiltration** — agent writes a secret into the sandbox, then sends it over the network | Do not place secrets in the sandbox. Use `--no-network` when executing untrusted content or when network access is unnecessary. |
 | **Resource exhaustion** — CPU abuse, memory bombs, disk fill, fork bombs | Backend-specific resource limits (`--cpu`, `--memory`, Docker PID limits via `--docker-run-flag`). Exec timeout prevents indefinite CPU use. |
 | **Container escape** | Relies on the backend's isolation technology (Docker, WASI). Not a Kilntainers-specific concern — use up-to-date container runtimes. |
 | **Host filesystem access** | No mounts by default. Future mapped working directory will be scoped to a single user-specified directory. (D14) |
@@ -552,7 +552,7 @@ kilntainers \
 ### 9.3 Operator Responsibilities
 
 - **Set resource limits** for shared or production deployments (`--cpu`, `--memory`, PID limits).
-- **Use `--network` only when required.** The default (disabled) is the safe choice.
+- **Use `--no-network` when network access is unnecessary**, especially when executing untrusted content.
 - **Review `--docker-run-flag` values.** This escape hatch can weaken isolation (e.g., `--privileged`, host mounts). Use with care.
 - **Do not expose HTTP transport to untrusted networks** without authentication. The default `--host 127.0.0.1` binding restricts to localhost.
 - **Use custom images with minimal software** when security is a concern (smaller attack surface).
