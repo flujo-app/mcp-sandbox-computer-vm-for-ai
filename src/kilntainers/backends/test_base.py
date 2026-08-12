@@ -189,7 +189,12 @@ class StubBackend(Backend):
         """Stub validation."""
         self.validate_called += 1
 
-    async def _create_sandbox(self) -> Sandbox:
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> Sandbox:
         """Stub sandbox creation."""
         self.create_sandbox_called += 1
         return StubSandbox()

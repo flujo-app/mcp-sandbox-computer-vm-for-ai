@@ -2,14 +2,26 @@
 
 import argparse
 import asyncio
+import json
 import time
 from dataclasses import dataclass, field
 
-from kilntainers.backends.base import Backend, ExecRequest, ExecResult, Sandbox
+from kilntainers.backends.base import (
+    Backend,
+    ComputerInfo,
+    ExecRequest,
+    ExecResult,
+    Sandbox,
+)
+from kilntainers.computers import random_computer_id
 from kilntainers.config import BackendConfig
 from kilntainers.errors import BackendError, SandboxDiedError
 
 DEFAULT_IMAGE = "debian:bookworm-slim"
+COMPUTER_NAME_PREFIX = "kilntainer-"
+COMPUTER_ID_LABEL = "kilntainers.computer-id"
+TEMPORARY_LABEL = "kilntainers.temporary"
+IMAGE_LABEL = "kilntainers.image"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -48,6 +60,9 @@ class _DockerSandboxState:
     host: str | None
     shell: str
     container_id: str
+    computer_id: str | None = None
+    temporary: bool = True
+    image: str | None = None
 
 
 class DockerBackend(Backend):
@@ -223,15 +238,32 @@ class DockerBackend(Backend):
                 f"Check that the image name is correct and the registry is reachable."
             )
 
-    def _build_run_command(self) -> list[str]:
+    def _build_run_command(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> list[str]:
         """Build the docker run argument list."""
+        computer_id = computer_id or random_computer_id()
         cmd = [
             "run",
             "-d",  # detached mode
-            "--rm",  # auto-remove on stop
             "--label",
             "kilntainers=true",  # identification label
+            "--label",
+            f"{COMPUTER_ID_LABEL}={computer_id}",
+            "--label",
+            f"{TEMPORARY_LABEL}={str(temporary).lower()}",
+            "--label",
+            f"{IMAGE_LABEL}={self._config.image}",
+            "--name",
+            f"{COMPUTER_NAME_PREFIX}{computer_id}",
         ]
+
+        if temporary:
+            # Temporary computers disappear when stopped by session cleanup.
+            cmd.append("--rm")
 
         # Network isolation (default: disabled)
         if not self._config.network_enabled:
@@ -253,7 +285,12 @@ class DockerBackend(Backend):
 
         return cmd
 
-    async def _create_sandbox(self) -> "DockerSandbox":
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> "DockerSandbox":
         """Create a Docker sandbox.
 
         Performs the full startup sequence:
@@ -262,11 +299,16 @@ class DockerBackend(Backend):
         3. Create sandbox object
         4. Verify readiness (cleanup if fails)
         """
+        computer_id = computer_id or random_computer_id()
+
         # 1. Ensure image is available (pull if needed)
         await self._ensure_image()
 
         # 2. Build docker run command
-        cmd = self._build_run_command()
+        cmd = self._build_run_command(
+            computer_id=computer_id,
+            temporary=temporary,
+        )
 
         # 3. Create and start container
         _, stdout, _ = await self._run_docker(*cmd, timeout=30)
@@ -278,6 +320,9 @@ class DockerBackend(Backend):
             host=self._config.host,
             shell=self._config.shell,
             container_id=container_id,
+            computer_id=computer_id,
+            temporary=temporary,
+            image=self._config.image,
         )
 
         # 5. Create sandbox object
@@ -292,6 +337,170 @@ class DockerBackend(Backend):
             raise
 
         return sandbox
+
+    async def _inspect_computer(self, computer_id: str) -> dict[str, object] | None:
+        """Return Docker inspect data for an owned named computer."""
+        returncode, stdout, _ = await self._run_docker(
+            "container",
+            "inspect",
+            f"{COMPUTER_NAME_PREFIX}{computer_id}",
+            check=False,
+            timeout=10,
+        )
+        if returncode != 0:
+            return None
+        try:
+            items = json.loads(stdout.decode("utf-8"))
+            data = items[0]
+        except (json.JSONDecodeError, IndexError, TypeError):
+            raise BackendError(
+                f"Docker returned invalid inspect data for computer '{computer_id}'."
+            )
+        if not isinstance(data, dict):
+            raise BackendError(
+                f"Docker returned invalid inspect data for computer '{computer_id}'."
+            )
+        labels = data.get("Config", {})
+        labels = labels.get("Labels", {}) if isinstance(labels, dict) else {}
+        if not isinstance(labels, dict) or labels.get(COMPUTER_ID_LABEL) != computer_id:
+            raise BackendError(
+                f"Docker name '{COMPUTER_NAME_PREFIX}{computer_id}' is already in "
+                "use by a container not owned by this server."
+            )
+        return data
+
+    def _sandbox_from_inspect(self, data: dict[str, object]) -> "DockerSandbox":
+        """Build a live sandbox handle from Docker inspect JSON."""
+        config = data.get("Config", {})
+        labels = config.get("Labels", {}) if isinstance(config, dict) else {}
+        labels = labels if isinstance(labels, dict) else {}
+        computer_id = str(labels.get(COMPUTER_ID_LABEL, ""))
+        temporary = str(labels.get(TEMPORARY_LABEL, "true")).lower() == "true"
+        image = str(labels.get(IMAGE_LABEL) or self._config.image)
+        return DockerSandbox(
+            _DockerSandboxState(
+                engine=self._config.engine,
+                host=self._config.host,
+                shell=self._config.shell,
+                container_id=str(data.get("Id", "")),
+                computer_id=computer_id,
+                temporary=temporary,
+                image=image,
+            )
+        )
+
+    async def attach_sandbox(self, computer_id: str) -> "DockerSandbox | None":
+        """Attach to a named container, starting it first when necessary."""
+        await self.validate()
+        data = await self._inspect_computer(computer_id)
+        if data is None:
+            return None
+        state = data.get("State", {})
+        running = bool(state.get("Running")) if isinstance(state, dict) else False
+        if not running:
+            await self._run_docker("start", str(data.get("Id", "")), timeout=30)
+            data = await self._inspect_computer(computer_id)
+            if data is None:  # pragma: no cover - provider race
+                raise BackendError(
+                    f"Computer '{computer_id}' disappeared while it was starting."
+                )
+        sandbox = self._sandbox_from_inspect(data)
+        await sandbox._verify_readiness()
+        return sandbox
+
+    async def list_computers(self) -> list[ComputerInfo]:
+        """List all Docker computers owned by this server."""
+        await self.validate()
+        _, stdout, _ = await self._run_docker(
+            "ps",
+            "-aq",
+            "--filter",
+            f"label={COMPUTER_ID_LABEL}",
+            timeout=10,
+        )
+        container_ids = stdout.decode("utf-8").split()
+        if not container_ids:
+            return []
+        _, inspect_stdout, _ = await self._run_docker(
+            "container",
+            "inspect",
+            *container_ids,
+            timeout=15,
+        )
+        try:
+            rows = json.loads(inspect_stdout.decode("utf-8"))
+        except json.JSONDecodeError:
+            raise BackendError("Docker returned invalid computer inventory data.")
+
+        computers: list[ComputerInfo] = []
+        for data in rows if isinstance(rows, list) else []:
+            if not isinstance(data, dict):
+                continue
+            config = data.get("Config", {})
+            labels = config.get("Labels", {}) if isinstance(config, dict) else {}
+            if not isinstance(labels, dict):
+                continue
+            computer_id = labels.get(COMPUTER_ID_LABEL)
+            if not isinstance(computer_id, str) or not computer_id:
+                continue
+            state_data = data.get("State", {})
+            state = (
+                str(state_data.get("Status", "unknown"))
+                if isinstance(state_data, dict)
+                else "unknown"
+            )
+            computers.append(
+                ComputerInfo(
+                    computer_id=computer_id,
+                    sandbox_id=str(data.get("Id", ""))[:12],
+                    backend="docker",
+                    state=state,
+                    temporary=(
+                        str(labels.get(TEMPORARY_LABEL, "true")).lower() == "true"
+                    ),
+                    image=str(labels.get(IMAGE_LABEL) or self._config.image),
+                    created_at=(
+                        str(data.get("Created")) if data.get("Created") else None
+                    ),
+                )
+            )
+        return computers
+
+    async def restart_computer(self, computer_id: str) -> "DockerSandbox | None":
+        """Restart a Docker computer without replacing its writable layer."""
+        data = await self._inspect_computer(computer_id)
+        if data is None:
+            return None
+        await self._run_docker("restart", "-t", "5", str(data.get("Id", "")))
+        refreshed = await self._inspect_computer(computer_id)
+        if refreshed is None:  # pragma: no cover - provider race
+            raise BackendError(f"Computer '{computer_id}' disappeared after restart.")
+        sandbox = self._sandbox_from_inspect(refreshed)
+        await sandbox._verify_readiness()
+        return sandbox
+
+    async def delete_computer(self, computer_id: str) -> bool:
+        """Force-remove a Docker computer and all writable state."""
+        data = await self._inspect_computer(computer_id)
+        if data is None:
+            return False
+        await self._run_docker("rm", "-f", str(data.get("Id", "")), timeout=20)
+        return True
+
+    async def factory_reset_computer(self, computer_id: str) -> "DockerSandbox | None":
+        """Recreate a named computer from its original image."""
+        data = await self._inspect_computer(computer_id)
+        if data is None:
+            return None
+        config = data.get("Config", {})
+        labels = config.get("Labels", {}) if isinstance(config, dict) else {}
+        labels = labels if isinstance(labels, dict) else {}
+        temporary = str(labels.get(TEMPORARY_LABEL, "true")).lower() == "true"
+        await self.delete_computer(computer_id)
+        return await self._create_sandbox(
+            computer_id=computer_id,
+            temporary=temporary,
+        )
 
     def tool_instructions(self) -> str | None:
         """Return tool description for Docker backend.
@@ -330,6 +539,9 @@ class DockerSandbox(Sandbox):
         self._host = state.host
         self._shell = state.shell
         self._container_id = state.container_id
+        self._computer_id = state.computer_id or state.container_id[:12]
+        self._temporary = state.temporary
+        self._image = state.image
         self._stopped = False
         self._stop_requested = False
         self._exec_lock = asyncio.Lock()
@@ -346,6 +558,16 @@ class DockerSandbox(Sandbox):
     def sandbox_id(self) -> str:
         """Return the short form (first 12 chars) of the container ID."""
         return self._container_id[:12]
+
+    @property
+    def computer_id(self) -> str:
+        """Return the stable computer slug rather than the container hash."""
+        return self._computer_id
+
+    @property
+    def temporary(self) -> bool:
+        """Return the provider-side cleanup mode recorded in Docker labels."""
+        return self._temporary
 
     async def _run_docker(
         self,

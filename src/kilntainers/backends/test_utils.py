@@ -122,7 +122,12 @@ class MockBackend(Backend):
         """Mark as validated (no-op for mock)."""
         self._validated = True
 
-    async def _create_sandbox(self) -> Sandbox:
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> Sandbox:
         """Return a MockSandbox.
 
         Supports test helpers:

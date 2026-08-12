@@ -142,7 +142,12 @@ class E2BBackend(Backend):
         except Exception as e:
             raise BackendError(f"E2B validation failed: {e}")
 
-    async def _create_sandbox(self) -> "E2BSandbox":
+    async def _create_sandbox(
+        self,
+        *,
+        computer_id: str | None = None,
+        temporary: bool = True,
+    ) -> "E2BSandbox":
         """Create an E2B sandbox.
 
         Performs the full startup sequence:

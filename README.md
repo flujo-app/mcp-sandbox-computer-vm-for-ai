@@ -5,8 +5,9 @@
         </picture>
     </a>
 </p>
+<h1 align="center">MCP Sandbox Computer VM for AI</h1>
 <h3 align="center">
-  Give Every Agent an Ephemeral Linux Sandbox — via MCP
+  Named, manageable Linux computers for AI agents — via MCP
 </h3>
 
 <p align="center">
@@ -17,13 +18,15 @@
   <a href="https://kiln.tech/blog"><img src="https://img.shields.io/badge/Newsletter-subscribe-blue?logo=mailboxdotorg&logoColor=white" alt="Newsletter"></a>
 </p>
 
-Kilntainers is an MCP server that gives LLM agents isolated Linux sandboxes for executing shell commands. 
+MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](https://github.com/Kiln-AI/Kilntainers). It gives agents isolated Linux computers, stable IDs, temporary or persistent lifecycles, an interactive MCP App dashboard, and first-class Docker and Fly Machines backends.
 
-- 🧰 **Multiple backends:** Containers (Docker, Podman), cloud-hosted micro-VMs ([Modal](https://modal.com), [E2B](https://e2b.dev)), and WebAssembly sandboxes (WASM BusyBox, or any WASM module).
+- 🖥️ **MCP App dashboard:** List computers, run commands, restart, factory reset, and delete from FLUJO or another stable MCP Apps host.
+- 🏷️ **Named computers:** Reconnect with a stable `computer_id`, or omit it to receive a readable random slug.
+- 💾 **Explicit lifecycle:** Temporary computers are removed with their MCP session; permanent computers survive and can be reattached later.
+- 🧰 **Multiple backends:** Docker/Podman, native Fly Machines, [Modal](https://modal.com), [E2B](https://e2b.dev), and WebAssembly.
 - 🏝️ **Isolated per agent:** Every agent gets its own dedicated sandbox — no shared state, no cross-contamination.
-- 🧹 **Ephemeral:** Sandboxes live for the duration of the MCP session, then are shut down and cleaned up automatically.
 - 🔒 **Secure by design:** The agent communicates *with* the sandbox over MCP — it doesn’t run *inside* it. No agent API keys, code, or prompts are exposed to the sandbox.
-- 🔌 **Simple MCP interface:** A single MCP tool, `sandbox_exec`, lets your agent run any Linux command.
+- 🔌 **Tool and UI access:** `sandbox_exec` stays simple, while provider-neutral lifecycle tools power both models and the dashboard.
 - 📈 **Scalable:** Scale from a few agents on your laptop to thousands running in parallel in the cloud.
 
 ## Why Kilntainers?
@@ -36,7 +39,7 @@ Install and run from CLI:
 
 ```bash
 # install
-uv tool install kilntainers
+uv tool install "git+https://github.com/flujo-app/mcp-sandbox-computer-vm-for-ai.git"
 # starts with defaults: stdio MCP server, Docker, and Debian-slim (see options below)
 kilntainers
 ```
@@ -53,6 +56,39 @@ Add to your MCP client (Claude, Cursor, etc.):
 }
 ```
 
+Call `computer_dashboard` to open the MCP App. The server advertises stable MCP Apps revision `2026-01-26` and serves the dashboard as `ui://kilntainers/computers` with no external browser dependencies.
+
+## Named computer lifecycle
+
+`sandbox_exec` accepts two additional optional inputs:
+
+- `computer_id`: a 1–63 character lowercase slug. The first call without one creates a readable random ID and reuses it as that MCP session's default.
+- `temporary`: defaults to `true`. Temporary computers are removed when the owning MCP session closes. Set it to `false` for a computer that survives server/session shutdown and can be reattached later by ID.
+
+Every execution result includes `computer_id` and `temporary` next to stdout, stderr, exit code, and duration:
+
+```json
+{
+  "computer_id": "steady-otter-a31f",
+  "temporary": false,
+  "stdout": "persistent\n",
+  "stderr": "",
+  "exit_code": 0,
+  "exec_duration_ms": 84
+}
+```
+
+Lifecycle tools are provider-neutral:
+
+| Tool | Purpose |
+|---|---|
+| `computer_dashboard` | Open the MCP App and return the current inventory |
+| `computer_list` | List state, backend, image, provider ID, and lifecycle mode |
+| `computer_create` | Create/attach by ID; omission always generates a new slug |
+| `computer_restart` | Restart while preserving writable state |
+| `computer_factory_reset` | Erase writable state and recreate from the base image |
+| `computer_delete` | Permanently remove the computer |
+
 ## How It Works
 
 ```
@@ -65,13 +101,13 @@ Add to your MCP client (Claude, Cursor, etc.):
 ```
 
 1. An MCP client connects to Kilntainers
-2. On the first `sandbox_exec` call, Kilntainers creates an isolated sandbox. Each connection gets its own independent sandbox.
+2. On the first `sandbox_exec` call, the server creates a named isolated computer. Each connection gets its own random default unless it explicitly attaches by ID.
 3. Commands run inside the sandbox; stdout, stderr, and exit code are returned
-4. When the session ends, the sandbox is destroyed and resources are cleaned up. 
+4. When the session ends, temporary computers are destroyed; permanent computers remain provider-side.
 
 **Security:** The agent communicates *with* the sandbox over MCP — it doesn't run *inside* it. This is intentional: agents often need secrets (API keys, system prompts, code), and those should never be exposed inside a sandbox where a prompt injection could exfiltrate them.
 
-**Agent Isolation & Sandbox Lifecycle:** Each MCP connection starts its own isolated sandbox. In streaming HTTP mode, a single MCP server can host many sandboxes in parallel, and `exec` calls are routed to the sandbox associated with that connection. In stdio mode, the server runs a single sandbox per process. When a connection closes, its sandbox is shut down and deleted.
+**Agent Isolation & Sandbox Lifecycle:** An omitted ID gives each MCP connection an isolated default computer. Explicit IDs make reconnection intentional. Docker labels and Fly Machine metadata make permanent computers discoverable after the MCP server itself restarts.
 
 ## Backend Examples
 
@@ -86,6 +122,36 @@ kilntainers                                     # Docker + debian-slim (defaults
 kilntainers --image alpine --engine podman      # Podman + Alpine
 kilntainers --image node:22 --network           # Node.js with networking
 ```
+
+### Docker Compose dashboard server
+
+The included image contains the Docker CLI and talks to the host daemon through its socket:
+
+```bash
+docker compose up --build
+# Streamable HTTP MCP endpoint: http://127.0.0.1:8080/mcp
+```
+
+`compose.yaml` binds only to loopback. For a remote listener, set `KILNTAINERS_AUTH_TOKEN` and send it as an `Authorization: Bearer …` header. Mounting the Docker socket grants the service control of the host Docker daemon; use a dedicated host or a restricted remote daemon in production.
+
+### Fly Machines
+
+Fly.io deploys a Docker image as a VM root filesystem and does not run a nested Docker daemon. The `fly` backend therefore provisions real [Fly Machines](https://fly.io/docs/machines/) through `flyctl`: temporary Machines use disposable root filesystems, while permanent Machines use `persist_rootfs=always`.
+
+```bash
+fly apps create mcp-sandbox-computer-vm-for-ai
+
+# Use an app-scoped token for Machine list/create/exec/destroy operations.
+fly secrets set -a mcp-sandbox-computer-vm-for-ai \
+  FLY_API_TOKEN="$(fly tokens create deploy -a mcp-sandbox-computer-vm-for-ai)" \
+  KILNTAINERS_AUTH_TOKEN="$(openssl rand -hex 32)"
+
+fly deploy
+```
+
+The MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`. Configure the same `KILNTAINERS_AUTH_TOKEN` as a bearer header in the MCP client. `fly.toml` keeps the controller Machine running because it owns MCP sessions and cleanup; sandbox Machines are standalone Machines distinguished by Kilntainers metadata and are not part of the controller process group.
+
+The included `fly.toml` defaults to Fly's São Paulo region (`gru`). Change `primary_region` and, when needed, `FLY_REGION` if you want the controller and newly created sandbox Machines in another supported region.
 
 ### Cloud Containers & VMs
 
@@ -142,7 +208,7 @@ Requires Python 3.13+. Docker backend requires Docker or Podman. The Modal and E
 ## CLI Reference
 
 ```
-usage: kilntainers [-h] [--backend {docker,go_busybox,modal,wasm}] [--transport {stdio,http}] [...]
+usage: kilntainers [-h] [--backend {docker,e2b,fly,go_busybox,modal,wasm}] [--transport {stdio,http}] [...]
 
 MCP server providing isolated Linux sandboxes for LLM agent shell execution.
 
@@ -150,8 +216,8 @@ options:
   -h, --help            show this help message and exit
 
 core options:
-  --backend {docker,e2b,go_busybox,modal,wasm}
-                        Backend to use (default: docker). Available: docker, e2b, go_busybox, modal, wasm
+  --backend {docker,e2b,fly,go_busybox,modal,wasm}
+                        Backend to use (default: docker)
   --transport {stdio,http}
                         MCP transport (default: stdio)
   --host HOST           HTTP bind address (default: 127.0.0.1, HTTP mode only)
@@ -161,6 +227,10 @@ core options:
                         Max combined stdout+stderr bytes per exec (default: 2097152 = 2 MiB)
   --session-timeout SESSION_TIMEOUT
                         Idle session timeout in seconds (default: 300, HTTP mode only)
+  --auth-token AUTH_TOKEN
+                        Bearer token for /mcp (default: KILNTAINERS_AUTH_TOKEN)
+  --allow-unauthenticated-http
+                        Explicitly allow a non-loopback listener without built-in auth
   --shell SHELL         Shell binary for command mode (e.g., /bin/bash, ash). Default: /bin/bash.
   --network             Enable network access in sandboxes (default: disabled)
 
@@ -179,6 +249,20 @@ docker backend options:
   --memory MEMORY       Docker memory limit (e.g., "512m")
   --docker-run-flag DOCKER_RUN_FLAGS
                         Additional flag passed to docker run. Repeatable. (e.g., --docker-run-flag "--pids-limit=256")
+
+fly backend options:
+  --fly-cli FLY_CLI     flyctl/fly executable (default: fly)
+  --fly-app FLY_APP     Fly App that owns sandbox Machines (default: FLY_APP_NAME)
+  --fly-token FLY_TOKEN Fly API token (default: FLY_API_TOKEN or FLY_TOKEN)
+  --fly-image FLY_IMAGE Base OCI image for sandbox Machines
+  --fly-region FLY_REGION
+                        Region for newly created Machines
+  --fly-cpu-kind {shared,performance}
+  --fly-cpus FLY_CPUS
+  --fly-memory FLY_MEMORY
+                        Memory per Machine in MB
+  --fly-rootfs-size FLY_ROOTFS_SIZE
+                        Optional root filesystem size in GB
 
 e2b backend options:
   --e2b-api-key E2B_API_KEY

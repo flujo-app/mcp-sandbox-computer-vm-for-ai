@@ -1,5 +1,7 @@
 """Tests for CLI argument parsing, config construction, and validation."""
 
+import subprocess
+import sys
 from typing import cast
 from unittest.mock import MagicMock, patch
 
@@ -326,12 +328,49 @@ def test_validate_config_http_mode_no_error():
     """Test that HTTP args are valid in HTTP mode."""
     parser = build_parser()
     args = parser.parse_args(
-        ["--transport", "http", "--host", "0.0.0.0", "--port", "9090"]
+        [
+            "--transport",
+            "http",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            "9090",
+            "--allow-unauthenticated-http",
+        ]
     )
     server_config, _docker_config = build_configs(args)
 
     # Should not raise
     validate_config(server_config)
+
+
+def test_validate_config_public_http_requires_auth_or_explicit_override():
+    parser = build_parser()
+    args = parser.parse_args(["--transport", "http", "--host", "0.0.0.0"])
+    server_config, _docker_config = build_configs(args)
+
+    with pytest.raises(SystemExit) as exc_info:
+        validate_config(server_config)
+
+    assert exc_info.value.code == 1
+
+
+def test_validate_config_public_http_accepts_bearer_token():
+    parser = build_parser()
+    args = parser.parse_args(
+        [
+            "--transport",
+            "http",
+            "--host",
+            "0.0.0.0",
+            "--auth-token",
+            "test-secret",
+        ]
+    )
+    server_config, _docker_config = build_configs(args)
+
+    validate_config(server_config)
+    assert server_config.auth_token == "test-secret"
 
 
 def test_validate_config_both_tool_description_params():
@@ -555,11 +594,14 @@ def test_main_keyboard_interrupt():
         mock_args = MagicMock()
         mock_parser.return_value.parse_args.return_value = mock_args
         mock_build_configs.return_value = (ServerConfig(), DockerBackendConfig())
-        mock_get_backend.return_value = lambda _: mock_backend
+        mock_backend_class = MagicMock(return_value=mock_backend)
+        mock_get_backend.return_value = mock_backend_class
         mock_create_server.return_value = mock_mcp
 
         # Should not raise
         main()
+
+        mock_backend_class.prepare_runtime.assert_called_once_with()
 
 
 # ================
@@ -584,3 +626,20 @@ def test_help_output_structure():
     assert "--engine" in help_text
     assert "--image" in help_text
     assert "--docker-run-flag" in help_text
+
+
+def test_loading_modal_backend_preserves_event_loop_policy_in_fresh_process():
+    """Loading Modal's backend class must not import its policy-changing SDK."""
+    script = """
+import asyncio
+from kilntainers.backends import get_backend_class
+
+policy_before = type(asyncio.get_event_loop_policy())
+get_backend_class("modal")
+policy_after = type(asyncio.get_event_loop_policy())
+raise SystemExit(0 if policy_after is policy_before else 1)
+"""
+
+    result = subprocess.run([sys.executable, "-c", script], check=False)
+
+    assert result.returncode == 0

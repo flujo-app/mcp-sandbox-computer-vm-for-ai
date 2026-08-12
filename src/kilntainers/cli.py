@@ -7,6 +7,7 @@ import sys
 import threading
 from typing import NoReturn
 
+from kilntainers.auth import BearerTokenMiddleware
 from kilntainers.backends import (
     get_available_backend_names,
     get_backend_class,
@@ -81,6 +82,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Idle session timeout in seconds (default: 300, HTTP mode only)",
     )
     core.add_argument(
+        "--auth-token",
+        default=os.getenv("KILNTAINERS_AUTH_TOKEN"),
+        help=(
+            "Static bearer token for the /mcp HTTP route "
+            "(default: KILNTAINERS_AUTH_TOKEN)"
+        ),
+    )
+    core.add_argument(
+        "--allow-unauthenticated-http",
+        action="store_true",
+        default=False,
+        help=(
+            "Allow a non-loopback HTTP listener without authentication. "
+            "Only use behind a trusted private network or auth proxy."
+        ),
+    )
+    core.add_argument(
         "--shell",
         default="/bin/bash",
         help="Shell binary for command mode (e.g., /bin/bash, ash). Default: /bin/bash.",
@@ -149,6 +167,8 @@ def build_configs(
         tool_instruction_override=args.tool_instruction_override,
         extended_tool_instruction=args.extended_tool_instruction,
         session_timeout=session_timeout,
+        auth_token=args.auth_token,
+        allow_unauthenticated_http=args.allow_unauthenticated_http,
     )
 
     # Delegate backend config construction to the backend class
@@ -228,6 +248,18 @@ def validate_config(server_config: ServerConfig) -> None:
     if server_config.output_limit < 1:
         _startup_error("--output-limit must be at least 1 byte.")
 
+    if (
+        server_config.transport == "http"
+        and server_config.host not in {"127.0.0.1", "localhost", "::1"}
+        and not server_config.auth_token
+        and not server_config.allow_unauthenticated_http
+    ):
+        _startup_error(
+            "A non-loopback HTTP listener can execute arbitrary sandbox commands. "
+            "Set KILNTAINERS_AUTH_TOKEN/--auth-token, or explicitly pass "
+            "--allow-unauthenticated-http behind a trusted private network."
+        )
+
 
 async def _async_main(
     server_config: ServerConfig,
@@ -285,6 +317,7 @@ def main() -> None:
     # Create backend (validation happens lazily on first sandbox_exec)
     backend_name = args.backend
     backend_class = get_backend_class(backend_name)
+    backend_class.prepare_runtime()
     backend = backend_class(backend_config)
 
     # Create the MCP server (assembles tool description, registers tool)
@@ -315,8 +348,25 @@ def main() -> None:
         os.kill(os.getpid(), signal.SIGINT)
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, _handle_sigterm)
 
     try:
-        mcp.run(transport=transport)
+        if server_config.transport == "http" and server_config.auth_token:
+            import uvicorn
+
+            app = mcp.streamable_http_app()
+            app.add_middleware(
+                BearerTokenMiddleware,
+                token=server_config.auth_token,
+            )
+            uvicorn.run(
+                app,
+                host=server_config.host,
+                port=server_config.port,
+                log_level="info",
+            )
+        else:
+            mcp.run(transport=transport)
     except KeyboardInterrupt:
         pass  # Clean exit on Ctrl+C

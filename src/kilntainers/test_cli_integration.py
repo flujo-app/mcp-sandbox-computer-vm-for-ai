@@ -5,6 +5,7 @@ MCP client connection. They test startup, help output, and error handling.
 """
 
 import subprocess
+import sys
 
 import pytest
 
@@ -19,7 +20,7 @@ class TestCLIStartup:
         """The CLI doesn't crash immediately when started (before MCP connection)."""
         # Run kilntainers with --help to verify basic CLI functionality
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--help"],
+            [sys.executable, "-m", "kilntainers", "--help"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -75,7 +76,7 @@ class TestCLIValidation:
     def test_cli_rejects_invalid_backend(self):
         """CLI rejects invalid backend choice."""
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--backend", "invalid"],
+            [sys.executable, "-m", "kilntainers", "--backend", "invalid"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -87,7 +88,7 @@ class TestCLIValidation:
     def test_cli_rejects_invalid_transport(self):
         """CLI rejects invalid transport choice."""
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--transport", "websocket"],
+            [sys.executable, "-m", "kilntainers", "--transport", "websocket"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -99,7 +100,7 @@ class TestCLIValidation:
     def test_cli_rejects_stdio_with_host(self):
         """CLI rejects --host in stdio mode."""
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--host", "0.0.0.0"],
+            [sys.executable, "-m", "kilntainers", "--host", "0.0.0.0"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -114,7 +115,7 @@ class TestCLIValidation:
     def test_cli_rejects_stdio_with_port(self):
         """CLI rejects --port in stdio mode."""
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--port", "9090"],
+            [sys.executable, "-m", "kilntainers", "--port", "9090"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -129,9 +130,7 @@ class TestCLIValidation:
         """CLI rejects both --tool-instruction-override and --extended-tool-instruction."""
         result = subprocess.run(
             [
-                "uv",
-                "run",
-                "python",
+                sys.executable,
                 "-m",
                 "kilntainers",
                 "--tool-instruction-override",
@@ -156,7 +155,7 @@ class TestCLIErrorOutput:
     def test_cli_errors_use_kilntainers_prefix(self):
         """CLI error messages use the 'kilntainers: error:' prefix."""
         result = subprocess.run(
-            ["uv", "run", "python", "-m", "kilntainers", "--host", "0.0.0.0"],
+            [sys.executable, "-m", "kilntainers", "--host", "0.0.0.0"],
             capture_output=True,
             text=True,
             timeout=10,

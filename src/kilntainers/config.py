@@ -41,3 +41,7 @@ class ServerConfig:
 
     # Session management (HTTP only)
     session_timeout: int = 300  # seconds (5 minutes)
+
+    # Remote HTTP protection
+    auth_token: str | None = None
+    allow_unauthenticated_http: bool = False
