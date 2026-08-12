@@ -1,10 +1,8 @@
 .claude
-src/kilntainers.egg-info
+*.egg-info/
 __pycache__/
 *.py[cod]
 build/
 dist/
 .env
 .coverage
-
-/src/kilntainers/__pycache__
