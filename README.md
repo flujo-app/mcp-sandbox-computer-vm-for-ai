@@ -1,21 +1,11 @@
-<p align="center">
-    <a href="https://kiln.tech">
-        <picture>
-          <img width="380" alt="Kilntainers by Kiln AI Logo" src="https://github.com/user-attachments/assets/09009b2a-1310-432b-941d-54ebf1fb78a8" />
-        </picture>
-    </a>
-</p>
 <h1 align="center">MCP Sandbox Computer VM for AI</h1>
 <h3 align="center">
   Named, manageable Linux computers for AI agents — via MCP
 </h3>
 
 <p align="center">
-  <a href="https://github.com/Kiln-AI/kilntainers/actions/workflows/build_and_test.yml"><img src="https://github.com/Kiln-AI/kilntainers/actions/workflows/build_and_test.yml/badge.svg" alt="Build and Test"></a>
-  <a href="https://github.com/Kiln-AI/kilntainers/actions/workflows/test_count.yml"><img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/scosman/9f8457cc9d44ab16ff8b9f1a977d25bb/raw/test_count_kiln.json" alt="Test Count Badge"></a>
+  <a href="https://github.com/flujo-app/mcp-sandbox-computer-vm-for-ai/actions/workflows/build_and_test.yml"><img src="https://github.com/flujo-app/mcp-sandbox-computer-vm-for-ai/actions/workflows/build_and_test.yml/badge.svg" alt="Build and Test"></a>
   <a href="https://pypi.org/project/mcp-sandbox-computer-vm-for-ai/"><img src="https://img.shields.io/pypi/v/mcp-sandbox-computer-vm-for-ai.svg?logo=pypi&label=PyPI&logoColor=gold" alt="PyPI"></a>
-  <a href="https://kiln.tech/discord"><img src="https://img.shields.io/badge/Discord-Kiln_AI-blue?logo=Discord&logoColor=white" alt="Discord"></a>
-  <a href="https://kiln.tech/blog"><img src="https://img.shields.io/badge/Newsletter-subscribe-blue?logo=mailboxdotorg&logoColor=white" alt="Newsletter"></a>
 </p>
 
 MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](https://github.com/Kiln-AI/Kilntainers). It gives agents isolated Linux computers, stable IDs, temporary or persistent lifecycles, an interactive MCP App dashboard, and first-class Docker and Fly Machines backends.
@@ -31,34 +21,38 @@ MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](http
 - 🔌 **Tool and UI access:** `sandbox_exec` stays simple, while provider-neutral lifecycle tools power both models and the dashboard.
 - 📈 **Scalable:** Scale from a few agents on your laptop to thousands running in parallel in the cloud.
 
-## Why Kilntainers?
+## Why sandbox computers?
 
-Agents are already excellent at using terminals, and can save thousands of tokens by leveraging common Linux utilities like `grep`, `find`, `jq`, `awk`, etc. However giving an agent access to the host OS is a security nightmare, and running thousands of parallel agents on a service is painful. Kilntainers gives every agent its own isolated, ephemeral sandbox.
+Agents are already excellent at using terminals and can save thousands of tokens with common Linux utilities like `grep`, `find`, `jq`, and `awk`. Giving an agent access to the host OS is dangerous, while provisioning large numbers of isolated environments is operationally painful. MCP Sandbox Computer VM for AI gives every agent a dedicated sandbox with an explicit lifecycle.
 
 ## Quick Start
 
-Install and run from CLI:
+Run the released package directly from PyPI. Docker and stdio are the defaults:
 
 ```bash
-# install
-uv tool install "git+https://github.com/flujo-app/mcp-sandbox-computer-vm-for-ai.git"
-# starts with defaults: stdio MCP server, Docker, and Debian-slim (see options below)
-kilntainers
+uvx mcp-sandbox-computer-vm-for-ai
 ```
 
-Add to your MCP client (Claude, Cursor, etc.):
+Add it to Claude Code:
+
+```bash
+claude mcp add --scope user sandbox-computer -- uvx mcp-sandbox-computer-vm-for-ai
+```
+
+Or add it to a JSON-based MCP client such as Claude Desktop:
 
 ```json
 {
   "mcpServers": {
-    "kilntainers": {
-      "command": "kilntainers"
+    "sandbox-computer": {
+      "command": "uvx",
+      "args": ["mcp-sandbox-computer-vm-for-ai"]
     }
   }
 }
 ```
 
-Call `computer_dashboard` to open the MCP App. The server advertises stable MCP Apps revision `2026-01-26` and serves the dashboard as `ui://kilntainers/computers` with no external browser dependencies.
+Call `computer_dashboard` to open the MCP App. The dashboard has no external browser dependencies. Its internal resource URI remains `ui://kilntainers/computers` for compatibility with the upstream implementation.
 
 ## Named computer lifecycle
 
@@ -95,14 +89,14 @@ Lifecycle tools are provider-neutral:
 
 ```
 ┌─────────────┐   MCP   ┌──────────────┐      ┌─────────────────────────┐
-│  LLM Agent  │◄───────►│  Kilntainers │◄────►│  Sandboxes              │
+│  LLM Agent  │◄───────►│  Sandbox MCP │◄────►│  Sandboxes              │
 │  (client)   │         │  MCP Server  │      │  - Docker/Podman        │
 │             │         │              │      │  - Cloud VM (Modal,E2B) │
 │             │         │              │      │  - WASM Sandbox         │
 └─────────────┘         └──────────────┘      └─────────────────────────┘
 ```
 
-1. An MCP client connects to Kilntainers
+1. An MCP client starts MCP Sandbox Computer VM for AI over stdio or connects over HTTP
 2. On the first `sandbox_exec` call, the server creates a named isolated computer. Each connection gets its own random default unless it explicitly attaches by ID.
 3. Commands run inside the sandbox; stdout, stderr, and exit code are returned
 4. When the session ends, temporary computers are destroyed; permanent computers remain provider-side.
@@ -120,10 +114,10 @@ See the [CLI Reference](#cli-reference) for all arguments.
 Local containers via Docker or Podman. Any OCI image works.
 
 ```bash
-kilntainers                                     # Docker + debian-slim (defaults)
-kilntainers --image alpine --engine podman      # Podman + Alpine
-kilntainers --image node:22                     # Node.js with networking
-kilntainers --no-network                        # Explicitly disable networking
+uvx mcp-sandbox-computer-vm-for-ai                                # Docker + Debian (defaults)
+uvx mcp-sandbox-computer-vm-for-ai --image alpine --engine podman # Podman + Alpine
+uvx mcp-sandbox-computer-vm-for-ai --image node:22                # Node.js with networking
+uvx mcp-sandbox-computer-vm-for-ai --no-network                   # Disable networking
 ```
 
 ### Docker Compose dashboard server
@@ -152,7 +146,7 @@ fly secrets set -a mcp-sandbox-computer-vm-for-ai \
 fly deploy
 ```
 
-The MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`. Configure the same `KILNTAINERS_AUTH_TOKEN` as a bearer header in the MCP client. `fly.toml` keeps the controller Machine running because it owns MCP sessions and cleanup; sandbox Machines are standalone Machines distinguished by Kilntainers metadata and are not part of the controller process group.
+The MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`. Configure the same `KILNTAINERS_AUTH_TOKEN` as a bearer header in the MCP client. `fly.toml` keeps the controller Machine running because it owns MCP sessions and cleanup; sandbox Machines are standalone Machines distinguished by project metadata and are not part of the controller process group.
 
 The included `fly.toml` defaults to Fly's São Paulo region (`gru`). Change `primary_region` and, when needed, `FLY_REGION` if you want the controller and newly created sandbox Machines in another supported region.
 
@@ -163,8 +157,8 @@ The included `fly.toml` defaults to Fly's São Paulo region (`gru`). Change `pri
 Hosted containers with sub-second startup via [Modal.com](https://modal.com). Scales to thousands of parallel sandboxes. Supports GPUs.
 
 ```bash
-kilntainers --backend modal
-kilntainers --backend modal --gpu A10G --region us-east  # GPU-accelerated
+uvx mcp-sandbox-computer-vm-for-ai --backend modal
+uvx mcp-sandbox-computer-vm-for-ai --backend modal --gpu A10G --region us-east
 ```
 
 Authenticate via `modal setup` CLI or `--modal-token-id` / `--modal-token-secret` flags.
@@ -174,8 +168,8 @@ Authenticate via `modal setup` CLI or `--modal-token-id` / `--modal-token-secret
 Cloud hosted micro-VM sandboxes from [E2B](https://e2b.dev).
 
 ```bash
-kilntainers --backend e2b # Default Debian image
-kilntainers --backend e2b --e2b-api-key ABCD --e2b-template my-custom-alpine # Custom image 
+uvx mcp-sandbox-computer-vm-for-ai --backend e2b
+uvx mcp-sandbox-computer-vm-for-ai --backend e2b --e2b-api-key ABCD --e2b-template my-custom-alpine
 ```
 
 Authenticate with `--e2b-api-key` CLI arg, or `E2B_API_KEY` environment variable.
@@ -185,8 +179,7 @@ Authenticate with `--e2b-api-key` CLI arg, or `E2B_API_KEY` environment variable
 Runs [go-busybox](https://github.com/rcarmo/go-busybox) in a WebAssembly sandbox. Not a full Linux environment, but provides common utilities (`grep`, `awk`, `sed`, `ls`, `wc`, `sort`, etc.) in a very lightweight and secure sandbox.
 
 ```bash
-uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # optional WASM support (+15MB)
-kilntainers --backend go_busybox
+uvx --from "mcp-sandbox-computer-vm-for-ai[wasm]" mcp-sandbox-computer-vm-for-ai --backend go_busybox
 ```
 
 ### WASM Runner
@@ -194,13 +187,13 @@ kilntainers --backend go_busybox
 Run a custom WASM module as the sandbox backend. Provides agents a set tools compiled to WebAssembly, and an isolated filesystem.
 
 ```bash
-uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # optional WASM support (+15MB)
-kilntainers --backend wasm --wasm-path ./my_tool.wasm
+uvx --from "mcp-sandbox-computer-vm-for-ai[wasm]" mcp-sandbox-computer-vm-for-ai --backend wasm --wasm-path ./my_tool.wasm
 ```
 
 ## Installation
 
 ```bash
+uvx mcp-sandbox-computer-vm-for-ai                    # run without installing
 uv tool install mcp-sandbox-computer-vm-for-ai        # recommended
 uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # include WASM backends (+15MB)
 pip install mcp-sandbox-computer-vm-for-ai            # also works with pip
@@ -210,7 +203,7 @@ Requires Python 3.13+. Docker backend requires Docker or Podman. The Modal and E
 
 ## Releasing
 
-Node is used only as the cross-platform release task runner; the published package remains Python. Release metadata is synchronized across `package.json`, `pyproject.toml`, `uv.lock`, `server.json`, and `kilntainers.__version__`.
+Node is used only as the cross-platform release task runner; the published package remains Python. The release command synchronizes all package and registry metadata.
 
 ```bash
 npm run release:check                 # credential-free command self-check
@@ -235,7 +228,7 @@ The registry command verifies the published PyPI README ownership marker before 
 ## CLI Reference
 
 ```
-usage: kilntainers [-h] [--backend {docker,e2b,fly,go_busybox,modal,wasm}] [--transport {stdio,http}] [...]
+usage: mcp-sandbox-computer-vm-for-ai [-h] [--backend {docker,e2b,fly,go_busybox,modal,wasm}] [--transport {stdio,http}] [...]
 
 MCP server providing isolated Linux sandboxes for LLM agent shell execution.
 
@@ -309,7 +302,7 @@ modal backend options:
   --modal-token-secret MODAL_TOKEN_SECRET
                         Modal token secret (overrides environment/default auth)
   --modal-app-name MODAL_APP_NAME
-                        Modal app name (default: kilntainers)
+                        Modal app name
   --modal-cpu MODAL_CPU
                         CPU cores (fractional, default: 1.0)
   --modal-memory MODAL_MEMORY
