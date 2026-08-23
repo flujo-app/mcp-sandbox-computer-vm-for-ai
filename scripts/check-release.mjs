@@ -2,22 +2,17 @@
 // Run the local, credential-free release gate with argument-safe subprocesses.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 run(process.execPath, ["scripts/sync-version.mjs", "--check"]);
-const virtualenvPython = path.join(
-  root,
-  ".venv",
-  process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
-);
-if (!existsSync(virtualenvPython)) {
-  run("uv", ["sync", "--all-extras", "--dev"]);
-}
-run("uvx", [
+run("uv", ["sync", "--all-extras", "--dev"]);
+run("uv", [
+  "run",
+  "--no-sync",
   "ruff",
   "check",
   "src/kilntainers",
@@ -25,8 +20,11 @@ run("uvx", [
   "I,F401,RUF,TID",
 ]);
 const productionModules = pythonModules(path.join(root, "src", "kilntainers"));
-run("uvx", ["ty", "check", ...productionModules]);
-run(virtualenvPython, [
+run("uv", ["run", "--no-sync", "ty", "check", ...productionModules]);
+run("uv", [
+  "run",
+  "--no-sync",
+  "python",
   "-m",
   "pytest",
   "src/kilntainers",

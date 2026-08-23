@@ -357,7 +357,7 @@ def main() -> None:
 
             app = mcp.streamable_http_app()
             app.add_middleware(
-                BearerTokenMiddleware,
+                BearerTokenMiddleware,  # ty: ignore[invalid-argument-type]
                 token=server_config.auth_token,
             )
             uvicorn.run(

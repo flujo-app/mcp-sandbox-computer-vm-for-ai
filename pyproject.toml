@@ -70,6 +70,8 @@ dev = [
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.6.0",
+    "ruff==0.15.4",
+    "ty==0.0.20",
     "wasmtime>=41.0.0",
 ]
 
@@ -83,6 +85,7 @@ exclude = []
 # I is import sorting
 # F401 is unused imports
 # RUF is ruff rules. In particular 012+008 are mutable defaults (important)
+select = ["E4", "E7", "E9", "F"]
 extend-select = ["I","F401","RUF","TID"]
 
 [tool.pytest.ini_options]

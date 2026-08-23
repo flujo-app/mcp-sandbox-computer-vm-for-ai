@@ -40,7 +40,7 @@ def test_windows_architecture_fallback_uses_python_platform(monkeypatch):
     wasm_backend_module._ensure_windows_processor_architecture()
 
     assert os.environ["PROCESSOR_ARCHITECTURE"] == "AMD64"
-    assert wasm_backend_module.platform._uname_cache is None
+    assert getattr(wasm_backend_module.platform, "_uname_cache") is None
 
 
 class MockWasiConfig:

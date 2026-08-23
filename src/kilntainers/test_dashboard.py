@@ -68,7 +68,10 @@ def test_bearer_middleware_protects_only_mcp_route() -> None:
             Route("/mcp", _ok, methods=["GET", "POST"]),
         ]
     )
-    app.add_middleware(BearerTokenMiddleware, token="test-secret")
+    app.add_middleware(
+        BearerTokenMiddleware,  # ty: ignore[invalid-argument-type]
+        token="test-secret",
+    )
 
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200

@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import importlib.resources
 import os
 import platform
 import shutil
@@ -12,6 +13,10 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+from kilntainers.backends.base import Backend, ExecRequest, ExecResult, Sandbox
+from kilntainers.config import BackendConfig
+from kilntainers.errors import BackendError, SandboxDiedError
 
 
 def _ensure_windows_processor_architecture() -> None:
@@ -38,7 +43,7 @@ def _ensure_windows_processor_architecture() -> None:
         os.environ["PROCESSOR_ARCHITECTURE"] = architecture
         # A failed WMI query may already have cached an empty machine value.
         # Clear it so Wasmtime's platform.machine() call uses the fallback.
-        setattr(platform, "_uname_cache", None)
+        platform._uname_cache = None  # type: ignore[attr-defined]
 
 
 _ensure_windows_processor_architecture()
@@ -50,12 +55,6 @@ else:
         import wasmtime
     except ImportError:
         wasmtime = None
-
-import importlib.resources
-
-from kilntainers.backends.base import Backend, ExecRequest, ExecResult, Sandbox
-from kilntainers.config import BackendConfig
-from kilntainers.errors import BackendError, SandboxDiedError
 
 
 class _WasmTimeout(Exception):

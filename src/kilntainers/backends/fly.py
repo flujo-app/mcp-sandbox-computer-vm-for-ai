@@ -8,6 +8,7 @@ import os
 import shlex
 import time
 from dataclasses import dataclass
+from typing import cast
 
 from kilntainers.backends.base import (
     Backend,
@@ -215,8 +216,9 @@ class FlyBackend(Backend):
         config = row.get("config", row.get("Config", {}))
         if not isinstance(config, dict):
             return {}
+        config = cast("dict[str, object]", config)
         metadata = config.get("metadata", config.get("Metadata", {}))
-        return metadata if isinstance(metadata, dict) else {}
+        return cast("dict[str, object]", metadata) if isinstance(metadata, dict) else {}
 
     @staticmethod
     def _value(row: dict[str, object], *names: str) -> object | None:
@@ -472,12 +474,13 @@ class FlySandbox(Sandbox):
             payload = payload[0]
         if not isinstance(payload, dict):
             return None
+        result = cast("dict[str, object]", payload)
         for key in ("result", "Result"):
-            nested = payload.get(key)
+            nested = result.get(key)
             if isinstance(nested, dict):
-                payload = nested
+                result = cast("dict[str, object]", nested)
                 break
-        return payload
+        return result
 
     async def _do_exec(self, request: ExecRequest) -> ExecResult:
         if not self._backend._config.app:

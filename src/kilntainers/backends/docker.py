@@ -5,6 +5,7 @@ import asyncio
 import json
 import time
 from dataclasses import dataclass, field
+from typing import cast
 
 from kilntainers.backends.base import (
     Backend,
@@ -372,8 +373,9 @@ class DockerBackend(Backend):
     def _sandbox_from_inspect(self, data: dict[str, object]) -> "DockerSandbox":
         """Build a live sandbox handle from Docker inspect JSON."""
         config = data.get("Config", {})
-        labels = config.get("Labels", {}) if isinstance(config, dict) else {}
-        labels = labels if isinstance(labels, dict) else {}
+        config = cast("dict[str, object]", config) if isinstance(config, dict) else {}
+        labels = config.get("Labels", {})
+        labels = cast("dict[str, object]", labels) if isinstance(labels, dict) else {}
         computer_id = str(labels.get(COMPUTER_ID_LABEL, ""))
         temporary = str(labels.get(TEMPORARY_LABEL, "true")).lower() == "true"
         image = str(labels.get(IMAGE_LABEL) or self._config.image)
@@ -396,7 +398,8 @@ class DockerBackend(Backend):
         if data is None:
             return None
         state = data.get("State", {})
-        running = bool(state.get("Running")) if isinstance(state, dict) else False
+        state = cast("dict[str, object]", state) if isinstance(state, dict) else {}
+        running = bool(state.get("Running"))
         if not running:
             await self._run_docker("start", str(data.get("Id", "")), timeout=30)
             data = await self._inspect_computer(computer_id)
@@ -493,8 +496,9 @@ class DockerBackend(Backend):
         if data is None:
             return None
         config = data.get("Config", {})
-        labels = config.get("Labels", {}) if isinstance(config, dict) else {}
-        labels = labels if isinstance(labels, dict) else {}
+        config = cast("dict[str, object]", config) if isinstance(config, dict) else {}
+        labels = config.get("Labels", {})
+        labels = cast("dict[str, object]", labels) if isinstance(labels, dict) else {}
         temporary = str(labels.get(TEMPORARY_LABEL, "true")).lower() == "true"
         await self.delete_computer(computer_id)
         return await self._create_sandbox(
