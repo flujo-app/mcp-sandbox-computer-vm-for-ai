@@ -40,7 +40,7 @@ Process starts
   │       │
   │       ├── Accept MCP messages (tools/list, tools/call)
   │       │     ├── tools/list → responds immediately (no sandbox needed)
-  │       │     └── First tools/call sandbox_exec:
+  │       │     └── First tools/call terminal_execute:
   │       │           ├── get_or_create_sandbox()
   │       │           │     ├── backend.validate() (cached after first success)
   │       │           │     ├── Create sandbox (pull → run → readiness check)
@@ -60,14 +60,14 @@ Process starts
 
 ### 2.2 One Sandbox, One Session
 
-In stdio mode, there is exactly one sandbox for the entire server process. The lifespan enters when `mcp.run()` starts and exits when the transport shuts down. However, **sandbox creation is lazy** — the sandbox is not created until the first `sandbox_exec` call.
+In stdio mode, there is exactly one sandbox for the entire server process. The lifespan enters when `mcp.run()` starts and exits when the transport shuts down. However, **sandbox creation is lazy** — the sandbox is not created until the first `terminal_execute` call.
 
 This means:
 - **`tools/list` responds immediately.** No sandbox creation is needed for non-exec requests. The server accepts MCP connections as soon as the lifespan enters.
-- **Image pull blocks the first `sandbox_exec`.** The first `sandbox_exec` call creates the sandbox, which may include an image pull. Image pull progress goes to stderr, which the MCP client can display to the user.
+- **Image pull blocks the first `terminal_execute`.** The first `terminal_execute` call creates the sandbox, which may include an image pull. Image pull progress goes to stderr, which the MCP client can display to the user.
 - **No session ID.** The MCP stdio transport does not have session identifiers — there's one implicit session.
-- **Sandbox creation failure = exec error, not process exit.** If the sandbox can't be created (image pull failure, Docker not running), the `sandbox_exec` call returns an MCP error (`isError: true`). The session remains alive — subsequent `sandbox_exec` calls will retry creation. Once a sandbox is created successfully, it is used for all future calls.
-- **No sandbox if no exec.** If the session ends without any `sandbox_exec` calls, no sandbox is ever created and no container resources are consumed.
+- **Sandbox creation failure = exec error, not process exit.** If the sandbox can't be created (image pull failure, Docker not running), the `terminal_execute` call returns an MCP error (`isError: true`). The session remains alive — subsequent `terminal_execute` calls will retry creation. Once a sandbox is created successfully, it is used for all future calls.
+- **No sandbox if no exec.** If the session ends without any `terminal_execute` calls, no sandbox is ever created and no container resources are consumed.
 
 ### 2.3 Shutdown Triggers
 
@@ -125,9 +125,9 @@ When an MCP client sends an `initialize` request over HTTP, the SDK's `Streamabl
 
 **`initialize` completes immediately.** No sandbox is created during session initialization. The client receives the session ID without waiting for container startup.
 
-**Sandbox creation happens on first `sandbox_exec`.** When the first `sandbox_exec` tool call arrives for the session, `SessionContext.get_or_create_sandbox()` creates the sandbox (validate backend, pull image, start container, readiness check). The sandbox is then used for all subsequent `sandbox_exec` calls in the session.
+**Sandbox creation happens on first `terminal_execute`.** When the first `terminal_execute` tool call arrives for the session, `SessionContext.get_or_create_sandbox()` creates the sandbox (validate backend, pull image, start container, readiness check). The sandbox is then used for all subsequent `terminal_execute` calls in the session.
 
-**Concurrent session creation.** Multiple clients can connect simultaneously. Each session has its own lazy `SessionContext`. Sandbox creation within each session is concurrency-safe — if multiple `sandbox_exec` calls arrive simultaneously, only one sandbox is created per session.
+**Concurrent session creation.** Multiple clients can connect simultaneously. Each session has its own lazy `SessionContext`. Sandbox creation within each session is concurrency-safe — if multiple `terminal_execute` calls arrive simultaneously, only one sandbox is created per session.
 
 ### 3.3 Session Identification
 
@@ -231,11 +231,11 @@ HTTP session 2 ──→  sandbox C  ──→     container C
 
 A sandbox's lifetime is bounded by its session's lifespan context, but creation is lazy:
 
-- **Created:** On the first `sandbox_exec` call within the session (lazy, not on session initialization).
+- **Created:** On the first `terminal_execute` call within the session (lazy, not on session initialization).
 - **Alive:** From creation until the session ends. Accepts exec calls.
 - **Destroyed:** When the lifespan context exits (session teardown), via `SessionContext.cleanup()` → `sandbox.stop()`. If no sandbox was ever created, cleanup is a no-op.
 
-A session can exist without a sandbox (before the first `sandbox_exec` or if no `sandbox_exec` is ever called). Once a sandbox is created, it belongs exclusively to that session.
+A session can exist without a sandbox (before the first `terminal_execute` or if no `terminal_execute` is ever called). Once a sandbox is created, it belongs exclusively to that session.
 
 ### 5.3 Backend Lifetime
 
@@ -423,7 +423,7 @@ The lifespan context manager was introduced in Phase 4 §2.2. This section provi
 
 ### 8.1 SessionContext
 
-`SessionContext` owns the lazy sandbox lifecycle. The sandbox is not created until the first `sandbox_exec` call triggers `get_or_create_sandbox()`.
+`SessionContext` owns the lazy sandbox lifecycle. The sandbox is not created until the first `terminal_execute` call triggers `get_or_create_sandbox()`.
 
 ```python
 class SessionContext:
@@ -518,7 +518,7 @@ class SessionContext:
 
 ### 8.2 Lifespan Factory
 
-The lifespan is now trivial — it creates a `SessionContext` and cleans up on exit. Sandbox creation is deferred to the first `sandbox_exec` call.
+The lifespan is now trivial — it creates a `SessionContext` and cleans up on exit. Sandbox creation is deferred to the first `terminal_execute` call.
 
 ```python
 def create_lifespan(
@@ -530,7 +530,7 @@ def create_lifespan(
     """Create a lifespan context manager for the given transport.
 
     The returned context manager sets up a SessionContext per session.
-    Sandbox creation is lazy — it happens on the first sandbox_exec
+    Sandbox creation is lazy — it happens on the first terminal_execute
     call, not when the lifespan enters.
     """
 
@@ -574,7 +574,7 @@ def create_server(
     )
 
     handler = _create_handler(config)
-    mcp.add_tool(handler, name="sandbox_exec", description=description)
+    mcp.add_tool(handler, name="terminal_execute", description=description)
 
     return mcp
 ```
@@ -585,15 +585,15 @@ def create_server(
 
 ### 9.1 Sandbox Creation Failure
 
-Since sandbox creation is lazy (happens on first `sandbox_exec`, not during session initialization), creation failures are handled differently than if they occurred at session init:
+Since sandbox creation is lazy (happens on first `terminal_execute`, not during session initialization), creation failures are handled differently than if they occurred at session init:
 
 If `backend.create_sandbox()` raises `BackendError` during `get_or_create_sandbox()`:
 
-- **The `sandbox_exec` call returns `isError: true`** with the BackendError message. The session remains alive.
-- **Subsequent `sandbox_exec` calls retry creation.** The `SessionContext` allows retry — `_sandbox` stays `None` on failure, so the next call enters the creation path again.
+- **The `terminal_execute` call returns `isError: true`** with the BackendError message. The session remains alive.
+- **Subsequent `terminal_execute` calls retry creation.** The `SessionContext` allows retry — `_sandbox` stays `None` on failure, so the next call enters the creation path again.
 - **Once a sandbox is successfully created, it is used for all future calls.** No second sandbox is ever created within a session.
 
-This covers: Docker daemon down, image pull failure, readiness check failure, resource exhaustion. Transient failures (e.g., network hiccup during image pull) are automatically retried on the next `sandbox_exec` call.
+This covers: Docker daemon down, image pull failure, readiness check failure, resource exhaustion. Transient failures (e.g., network hiccup during image pull) are automatically retried on the next `terminal_execute` call.
 
 ### 9.2 Concurrent Death and Exec
 
@@ -646,11 +646,11 @@ This phase does not introduce new modules. It refines the existing modules defin
 
 - **`SessionContext`** — Refactored from a simple dataclass to a class with lazy sandbox creation, concurrency-safe `get_or_create_sandbox()`, death monitor management, and `cleanup()`. See §8.1.
 - **`create_lifespan()`** — Simplified. No longer creates a sandbox or death task directly — delegates to `SessionContext`. See §8.2.
-- **`sandbox_exec_handler()`** — Uses `await session_context.get_or_create_sandbox()` instead of direct `sandbox` attribute access. Catches `BackendError` from lazy creation.
+- **`terminal_execute_handler()`** — Uses `await session_context.get_or_create_sandbox()` instead of direct `sandbox` attribute access. Catches `BackendError` from lazy creation.
 
 ### 10.2 `cli.py` Changes
 
-- **Remove eager backend validation** — The `_validate_backend()` call in `main()` is removed. Backend validation happens lazily inside `create_sandbox()` on first `sandbox_exec`.
+- **Remove eager backend validation** — The `_validate_backend()` call in `main()` is removed. Backend validation happens lazily inside `create_sandbox()` on first `terminal_execute`.
 - **Session timeout passthrough** — The startup flow must pass `config.session_timeout` to the FastMCP/session manager configuration. The exact mechanism depends on the SDK integration approach (§4.2).
 
 ### 10.3 Imports

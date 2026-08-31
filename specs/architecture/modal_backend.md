@@ -278,7 +278,7 @@ This validates:
 
 ### 4.4 Tool Instructions
 
-Returns the tool description for the `sandbox_exec` tool, with dynamic values from configuration.
+Returns the tool description for the `terminal_execute` tool, with dynamic values from configuration.
 
 ```python
 def tool_instructions(self) -> str | None:

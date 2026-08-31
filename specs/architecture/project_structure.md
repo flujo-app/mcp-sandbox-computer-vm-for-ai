@@ -68,7 +68,7 @@ Detailed designs for each module come in later architecture phases. This is the 
 |---|---|
 | `cli.py` | Argument parsing, startup validation orchestration, entry point logic. (Phase 5) |
 | `config.py` | Typed configuration objects populated from CLI args. Passed to server and backend. (Phase 5) |
-| `server.py` | MCP server construction, `sandbox_exec` tool registration, request validation, response formatting, tool description assembly. (Phase 4) |
+| `server.py` | MCP server construction, `terminal_execute` tool registration, request validation, response formatting, tool description assembly. (Phase 4) |
 | `errors.py` | Exception classes used across the codebase. (Phase 7) |
 | `backends/base.py` | `Backend` ABC, `Sandbox` ABC, shared types (`ExecResult` dataclass). (Phase 2) |
 | `backends/docker.py` | `DockerBackend` and `DockerSandbox` implementations. (Phase 3) |

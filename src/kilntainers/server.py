@@ -241,7 +241,7 @@ def assemble_tool_description(
     override: str | None,
     extended: str | None,
 ) -> str:
-    """Assemble the sandbox_exec tool description.
+    """Assemble the terminal_execute tool description.
 
     Raises BackendError if the result would be empty.
 
@@ -303,7 +303,7 @@ def create_lifespan(
 
     The returned context manager creates a SessionContext that supports
     lazy sandbox creation. The sandbox is not created until the first
-    sandbox_exec call.
+    terminal_execute call.
 
     Args:
         backend: The backend to use for creating sandboxes.
@@ -386,16 +386,16 @@ def _validate_inputs(
 
 
 def _create_handler(config: ServerConfig) -> Callable[..., Any]:
-    """Create the sandbox_exec handler with server config bound via closure.
+    """Create the terminal_execute handler with server config bound via closure.
 
     Args:
         config: The server configuration containing defaults.
 
     Returns:
-        An async handler function for the sandbox_exec tool.
+        An async handler function for the terminal_execute tool.
     """
 
-    async def sandbox_exec_handler(
+    async def terminal_execute_handler(
         command: str | None = None,
         args: list[str] | None = None,
         stdin: str | None = None,
@@ -405,7 +405,7 @@ def _create_handler(config: ServerConfig) -> Callable[..., Any]:
         temporary: bool = True,
         ctx: Context[ServerSession, SessionContext] | None = None,
     ) -> CallToolResult:
-        """Handle a sandbox_exec tool call.
+        """Handle a terminal_execute tool call.
 
         Args:
             command: Shell command string (mutually exclusive with args).
@@ -496,7 +496,7 @@ def _create_handler(config: ServerConfig) -> Callable[..., Any]:
             structuredContent=response,
         )
 
-    return sandbox_exec_handler
+    return terminal_execute_handler
 
 
 def _computer_ui_meta(*, launcher: bool = False) -> dict[str, Any]:
@@ -778,20 +778,20 @@ def create_server(
 
     @mcp.custom_route("/", methods=["GET"], include_in_schema=False)
     async def service_info(request: Request) -> JSONResponse:
-        return JSONResponse(
-            {
-                "name": "mcp-sandbox-computer-vm-for-ai",
-                "mcp_endpoint": "/mcp",
-                "dashboard_resource": DASHBOARD_URI,
-                "health": "/healthz",
-            }
-        )
+        payload = {
+            "name": "mcp-sandbox-computer-vm-for-ai",
+            "mcp_endpoint": "/mcp",
+            "health": "/healthz",
+        }
+        if config.enable_lifecycle_tools:
+            payload["dashboard_resource"] = DASHBOARD_URI
+        return JSONResponse(payload)
 
     handler = _create_handler(config)
 
     # Wrapper closure for better MCP type hinting
     # type ignore and noqa needed to get the right type hints. Type hinting doesn't work for Optional[str] so str but assign None as default.
-    async def sandbox_exec(
+    async def terminal_execute(
         command: Annotated[
             str,  # noqa: RUF013
             Field(description="Shell command string (mutually exclusive with args)."),
@@ -843,13 +843,14 @@ def create_server(
         )
 
     mcp.add_tool(
-        sandbox_exec,
-        name="sandbox_exec",
+        terminal_execute,
+        name="terminal_execute",
         description=description,
         meta=_computer_ui_meta(),
     )
 
-    _register_computer_tools(mcp, config)
-    _enable_mcp_apps_capability(mcp)
+    if config.enable_lifecycle_tools:
+        _register_computer_tools(mcp, config)
+        _enable_mcp_apps_capability(mcp)
 
     return mcp

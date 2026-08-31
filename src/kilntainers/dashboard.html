@@ -280,7 +280,7 @@
     outputEl.textContent += "\n\n$ " + command + "\n";
     outputEl.scrollTop = outputEl.scrollHeight;
     try {
-      var data = await callTool("sandbox_exec", {
+      var data = await callTool("terminal_execute", {
         computer_id: computer.computer_id,
         temporary: computer.temporary,
         command: command

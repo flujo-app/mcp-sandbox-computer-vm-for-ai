@@ -243,7 +243,7 @@ class TestHTTPSessionIsolation:
 
                     # Client 1: touch a.txt
                     result = await session.call_tool(
-                        "sandbox_exec", {"command": "touch a.txt"}
+                        "terminal_execute", {"command": "touch a.txt"}
                     )
                     results_client1.append({"cmd": "touch a.txt", "result": result})
                     client1_done_touch.set()
@@ -251,7 +251,9 @@ class TestHTTPSessionIsolation:
                     await client2_done_touch.wait()  # Wait for client 2 to touch b.txt
 
                     # Client 1: ls (should see a.txt)
-                    result = await session.call_tool("sandbox_exec", {"command": "ls"})
+                    result = await session.call_tool(
+                        "terminal_execute", {"command": "ls"}
+                    )
                     results_client1.append({"cmd": "ls", "result": result})
 
         # Client 2 session
@@ -270,7 +272,7 @@ class TestHTTPSessionIsolation:
 
                     # Client 2: touch b.txt
                     result = await session.call_tool(
-                        "sandbox_exec", {"command": "touch b.txt"}
+                        "terminal_execute", {"command": "touch b.txt"}
                     )
                     results_client2.append({"cmd": "touch b.txt", "result": result})
                     client2_done_touch.set()
@@ -278,7 +280,9 @@ class TestHTTPSessionIsolation:
                     await client1_done_touch.wait()  # Wait for client 1 to touch a.txt
 
                     # Client 2: ls (should see b.txt, NOT a.txt)
-                    result = await session.call_tool("sandbox_exec", {"command": "ls"})
+                    result = await session.call_tool(
+                        "terminal_execute", {"command": "ls"}
+                    )
                     results_client2.append({"cmd": "ls", "result": result})
 
         try:

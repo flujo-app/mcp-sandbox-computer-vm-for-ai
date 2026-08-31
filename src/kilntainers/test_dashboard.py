@@ -13,12 +13,14 @@ from kilntainers.server import create_server
 
 
 def test_dashboard_tool_resource_and_extension_are_registered() -> None:
-    server = create_server(MockBackend(BackendConfig()), ServerConfig())
+    server = create_server(
+        MockBackend(BackendConfig()), ServerConfig(enable_lifecycle_tools=True)
+    )
     tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
     resources = server._resource_manager.list_resources()
 
     assert set(tools) == {
-        "sandbox_exec",
+        "terminal_execute",
         "computer_dashboard",
         "computer_list",
         "computer_create",
@@ -44,16 +46,31 @@ def test_dashboard_tool_resource_and_extension_are_registered() -> None:
 
 
 async def test_dashboard_html_is_self_contained_and_calls_management_tools() -> None:
-    server = create_server(MockBackend(BackendConfig()), ServerConfig())
+    server = create_server(
+        MockBackend(BackendConfig()), ServerConfig(enable_lifecycle_tools=True)
+    )
     resource = server._resource_manager.list_resources()[0]
     html = await resource.read()
 
     assert isinstance(html, str)
     assert "2026-01-26" in html
     assert 'callTool("computer_list"' in html
-    assert 'callTool("sandbox_exec"' in html
+    assert 'callTool("terminal_execute"' in html
     assert "<script src=" not in html
     assert "<link rel=" not in html
+
+
+def test_lifecycle_tools_and_dashboard_are_disabled_by_default() -> None:
+    server = create_server(MockBackend(BackendConfig()), ServerConfig())
+
+    tools = {tool.name for tool in server._tool_manager.list_tools()}
+    resources = server._resource_manager.list_resources()
+    capabilities = server._mcp_server.create_initialization_options().capabilities
+    payload = capabilities.model_dump(by_alias=True, exclude_none=True)
+
+    assert tools == {"terminal_execute"}
+    assert resources == []
+    assert "extensions" not in payload
 
 
 async def _ok(request):

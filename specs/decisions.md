@@ -93,9 +93,9 @@ Items queued:
 
 ---
 
-## D9: Tool Name -- `sandbox_exec`
+## D9: Tool Name -- `terminal_execute`
 
-**Decision:** The MCP tool is named `sandbox_exec`.
+**Decision:** The MCP tool is named `terminal_execute`.
 
 **Tool description:** No global/MCP-level default description. The backend must provide a tool description via its `tool_instructions()` method, or the user must provide `tool_instruction_override` at startup. If neither is provided, the server fails to start.
 
@@ -159,7 +159,7 @@ Items queued:
 
 ## D15: Command Interface -- Both String and Array (Revised)
 
-**Decision:** The `sandbox_exec` MCP tool accepts two mutually exclusive parameters:
+**Decision:** The `terminal_execute` MCP tool accepts two mutually exclusive parameters:
 - `command` (string): A shell command string. The backend is responsible for executing this through an appropriate shell (e.g., Docker/Debian uses `bash -c`, a BusyBox backend uses `sh -c`, etc.).
 - `args` (string array): Passed directly to the process as exec arguments, no shell involved. Use for programmatic calls where argument integrity matters (e.g., text editor passing file contents).
 
@@ -227,7 +227,7 @@ An optional `stdin` parameter (D30) can be combined with either mode to pipe dat
 
 ## D21: Exec Parameters -- Add Optional Timeout, Stdin, No Env
 
-**Decision:** The `sandbox_exec` tool parameters are:
+**Decision:** The `terminal_execute` tool parameters are:
 - `command` (string, mutually exclusive with `args`)
 - `args` (string array, mutually exclusive with `command`)
 - `stdin` (optional string) -- piped to the command's standard input. Usable with either `command` or `args`. (D30)
@@ -282,7 +282,7 @@ Configurable at startup via `--output-limit` flag.
 
 ## D25: Default Exec Timeout -- 120 Seconds
 
-**Decision:** Default per-exec timeout is 120 seconds. Configurable at startup via `--timeout` flag. Overridable per-call via the optional `timeout` parameter on `sandbox_exec`.
+**Decision:** Default per-exec timeout is 120 seconds. Configurable at startup via `--timeout` flag. Overridable per-call via the optional `timeout` parameter on `terminal_execute`.
 
 **Rationale:** 120s is long enough for package installs, builds, and test suites. Short enough to catch infinite loops and hung processes. Per-call override lets the agent request more time for known-long operations.
 
@@ -326,7 +326,7 @@ The API must be clean: no global state, no singleton sandbox. Each sandbox is an
 
 ## D30: Add `stdin` Parameter for Safe Data Passing
 
-**Decision:** Add an optional `stdin` (string) parameter to `sandbox_exec`, usable with either `command` or `args` mode. The string is piped to the command's standard input, completely bypassing the shell's argument parsing. Subject to a 2 MiB size limit (matching the output limit default). `command` and `args` remain mutually exclusive (D15 unchanged).
+**Decision:** Add an optional `stdin` (string) parameter to `terminal_execute`, usable with either `command` or `args` mode. The string is piped to the command's standard input, completely bypassing the shell's argument parsing. Subject to a 2 MiB size limit (matching the output limit default). `command` and `args` remain mutually exclusive (D15 unchanged).
 
 **Problem solved:** The existing interface forces a choice between shell features (`command` mode — pipes, redirects) and safe data passing (`args` mode — no escaping needed). There's no way to combine both. An LLM writing a large file with nested quotes, newlines, and JSON into the container faces a multi-layer escaping nightmare (JSON → shell → argument) in `command` mode, and can't redirect to a file in `args` mode (no shell). The LLM doesn't even know which shell is running (D20), so it can't escape correctly.
 

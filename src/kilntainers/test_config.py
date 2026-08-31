@@ -13,8 +13,9 @@ from kilntainers.config import ServerConfig
 class TestServerConfig:
     """Test ServerConfig dataclass."""
 
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch) -> None:
         """Default construction should produce expected values."""
+        monkeypatch.delenv("ENABLE_LIFECYCLE_TOOLS", raising=False)
         config = ServerConfig()
         assert config.transport == "stdio"
         assert config.host == "127.0.0.1"
@@ -23,6 +24,7 @@ class TestServerConfig:
         assert config.output_limit == 2_097_152
         assert config.tool_instruction_override is None
         assert config.extended_tool_instruction is None
+        assert config.enable_lifecycle_tools is False
         assert config.session_timeout == 300
 
     def test_custom_values(self) -> None:
@@ -35,6 +37,7 @@ class TestServerConfig:
             output_limit=1_048_576,
             tool_instruction_override="custom",
             extended_tool_instruction="extended",
+            enable_lifecycle_tools=True,
             session_timeout=600,
         )
         assert config.transport == "http"
@@ -44,6 +47,7 @@ class TestServerConfig:
         assert config.output_limit == 1_048_576
         assert config.tool_instruction_override == "custom"
         assert config.extended_tool_instruction == "extended"
+        assert config.enable_lifecycle_tools is True
         assert config.session_timeout == 600
 
     def test_frozen_immutable(self) -> None:

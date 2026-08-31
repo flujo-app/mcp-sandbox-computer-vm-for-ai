@@ -115,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     desc.add_argument(
         "--tool-instruction-override",
         default=None,
-        help="Replace the entire sandbox_exec tool description",
+        help="Replace the entire terminal_execute tool description",
     )
     desc.add_argument(
         "--extended-tool-instruction",
@@ -281,7 +281,7 @@ async def _async_main(
     Raises:
         SystemExit: If server creation fails.
     """
-    # Create backend (validation happens lazily on first sandbox_exec)
+    # Create backend (validation happens lazily on first terminal_execute)
     backend_class = get_backend_class(backend_name)
     backend = backend_class(backend_config)
 
@@ -314,7 +314,7 @@ def main() -> None:
     server_config, backend_config = build_configs(args)
     validate_config(server_config)
 
-    # Create backend (validation happens lazily on first sandbox_exec)
+    # Create backend (validation happens lazily on first terminal_execute)
     backend_name = args.backend
     backend_class = get_backend_class(backend_name)
     backend_class.prepare_runtime()

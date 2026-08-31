@@ -46,7 +46,7 @@ Items marked with [x] have been decided (see [decisions.md](decisions.md)) but m
 ## MCP Interface
 
 - [x] **Transport**: stdio and Streamable HTTP. No SSE (deprecated, different transport). (Decision D8 corrected, Functional spec §1)
-- [x] **Tool name**: `sandbox_exec`. No global default description -- backend provides or user overrides. (Decision D9)
+- [x] **Tool name**: `terminal_execute`. No global default description -- backend provides or user overrides. (Decision D9)
 - [x] **Tool description text**: Drafted for Docker backend with dynamic timeout/output-limit values. (Functional spec §7)
 - [x] **MCP server startup parameters**: Full CLI parameter schema including core params and Docker backend params. (Functional spec §3.1, §3.2)
 - [x] **Connection lifecycle details**: stdio: one sandbox per process. Streamable HTTP: one sandbox per session (Mcp-Session-Id), 5min idle timeout (configurable). Startup: pull → start → verify → accept. Shutdown: kill in-flight, stop sandbox, 10s force-kill. Death: drop connection. (Functional spec §4)

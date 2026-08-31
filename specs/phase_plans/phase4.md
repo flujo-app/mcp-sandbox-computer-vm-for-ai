@@ -1,6 +1,6 @@
 # Phase 4: MCP Server & Tool Layer — Implementation Plan
 
-Implement the MCP server using the official `mcp` SDK with FastMCP. Register the `sandbox_exec` tool, handle requests, and format responses. stdio transport only (HTTP deferred to Phase 7).
+Implement the MCP server using the official `mcp` SDK with FastMCP. Register the `terminal_execute` tool, handle requests, and format responses. stdio transport only (HTTP deferred to Phase 7).
 
 **Architecture references:**
 - [mcp_server.md](../architecture/mcp_server.md) §1–§9
@@ -57,7 +57,7 @@ Create the tool handler and supporting functions:
 
 2. **`_create_handler()` function** — Creates handler with server config bound via closure
 
-3. **`sandbox_exec_handler()` async function** — The actual tool handler:
+3. **`terminal_execute_handler()` async function** — The actual tool handler:
    - Validate inputs
    - Get sandbox from context
    - Construct `ExecRequest` (resolve defaults)
@@ -193,7 +193,7 @@ class SessionContext:
 ## Testing Approach
 
 - Use `MockBackend` and `MockSandbox` from `backends/test_utils.py`
-- Tests call `sandbox_exec_handler()` directly with mock `Context` for focused testing
+- Tests call `terminal_execute_handler()` directly with mock `Context` for focused testing
 - For integration-level tests, use `mcp._tool_manager.call_tool()` to test full dispatch
 - Mock `os.kill` and `os.getpid` for death propagation tests to avoid actually sending signals
 - Verify `CallToolResult` structure: `isError` boolean, `content` list with `TextContent`

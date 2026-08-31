@@ -183,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
     desc.add_argument(
         "--tool-instruction-override",
         default=None,
-        help="Replace the entire sandbox_exec tool description",
+        help="Replace the entire terminal_execute tool description",
     )
     desc.add_argument(
         "--extended-tool-instruction",
@@ -413,7 +413,7 @@ The complete startup sequence from process launch to "ready to accept connection
 └─────────────────────────────────────────────────┘
 ```
 
-**No eager backend validation.** The previous step 5 ("Validate backend prerequisites") has been removed. Backend validation (e.g., `docker info`) is deferred to the first `sandbox_exec` call, as part of lazy sandbox creation. This allows the server to start and respond to `tools/list` immediately. See `connection_lifecycle.md` §8 for the lazy creation design.
+**No eager backend validation.** The previous step 5 ("Validate backend prerequisites") has been removed. Backend validation (e.g., `docker info`) is deferred to the first `terminal_execute` call, as part of lazy sandbox creation. This allows the server to start and respond to `tools/list` immediately. See `connection_lifecycle.md` §8 for the lazy creation design.
 
 ### 6.1 Implementation
 
@@ -427,7 +427,7 @@ def main() -> None:
     validate_config(server_config, backend_config)
 
     # Create backend from registry using selected --backend
-    # No validation here — validation is deferred to first sandbox_exec
+    # No validation here — validation is deferred to first terminal_execute
     backend_cls = get_backend_class(args.backend)
     backend = backend_cls(backend_config)
 
@@ -476,7 +476,7 @@ Every step that can fail has a clear error path:
 
 Steps 1–5 are the "startup gauntlet" — all error-prone operations complete before the server starts accepting connections. Once `mcp.run()` is called, the server is in a known-good state for accepting MCP protocol messages.
 
-**Backend validation errors are deferred.** Errors like "Docker daemon is not running" are not caught at startup. They surface on the first `sandbox_exec` call as `isError: true` MCP responses. This tradeoff is intentional — it allows the server to start immediately and respond to `tools/list`, while errors that require a running backend are reported when the backend is actually needed.
+**Backend validation errors are deferred.** Errors like "Docker daemon is not running" are not caught at startup. They surface on the first `terminal_execute` call as `isError: true` MCP responses. This tradeoff is intentional — it allows the server to start immediately and respond to `tools/list`, while errors that require a running backend are reported when the backend is actually needed.
 
 ---
 
@@ -502,7 +502,7 @@ def validate_config(server_config, backend_config) -> None: ...
 def _startup_error(message: str) -> NoReturn: ...
 ```
 
-**Note:** `_validate_backend()` was removed — backend validation is deferred to the first `sandbox_exec` call (lazy sandbox creation).
+**Note:** `_validate_backend()` was removed — backend validation is deferred to the first `terminal_execute` call (lazy sandbox creation).
 
 ### 7.2 `config.py`
 
@@ -584,7 +584,7 @@ core options:
 
 tool description:
   --tool-instruction-override TOOL_INSTRUCTION_OVERRIDE
-                        Replace the entire sandbox_exec tool description
+                        Replace the entire terminal_execute tool description
   --extended-tool-instruction EXTENDED_TOOL_INSTRUCTION
                         Append to the backend's default tool description
 

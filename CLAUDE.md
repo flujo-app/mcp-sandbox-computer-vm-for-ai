@@ -1,6 +1,6 @@
 # Kilntainers: Secure Agent Sandboxes
 
-This fork extends Kilntainers into named sandbox computers. `sandbox_exec` supports stable computer IDs and temporary/permanent lifecycles; provider-neutral management tools and a stable MCP App dashboard manage Docker containers and Fly Machines.
+This fork extends Kilntainers into named sandbox computers. `terminal_execute` supports stable computer IDs and temporary/permanent lifecycles; optional provider-neutral management tools and a stable MCP App dashboard manage Docker containers and Fly Machines. Set `ENABLE_LIFECYCLE_TOOLS=true` to expose the `computer_*` tools and dashboard; they are disabled by default.
 
 ## Specs
 

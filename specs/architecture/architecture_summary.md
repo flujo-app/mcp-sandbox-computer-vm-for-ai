@@ -20,7 +20,7 @@ How the Docker backend implements the abstraction layer: subprocess calls to the
 
 ### [Phase 4: MCP Server & Tool Layer](mcp_server.md)
 
-MCP library evaluation (official `mcp` SDK v1.x with built-in FastMCP), server architecture with lifespan context for per-session sandbox management, `sandbox_exec` tool registration with dynamic description, the tool handler implementation (input validation, `ExecRequest` construction, `ExecResult` → JSON response formatting, `isError` mapping), tool description assembly rules, transport configuration (stdio and Streamable HTTP), and the `create_server()` factory function.
+MCP library evaluation (official `mcp` SDK v1.x with built-in FastMCP), server architecture with lifespan context for per-session sandbox management, `terminal_execute` tool registration with dynamic description, the tool handler implementation (input validation, `ExecRequest` construction, `ExecResult` → JSON response formatting, `isError` mapping), tool description assembly rules, transport configuration (stdio and Streamable HTTP), and the `create_server()` factory function.
 
 ### [Phase 5: CLI, Configuration & Startup](cli_and_startup.md)
 

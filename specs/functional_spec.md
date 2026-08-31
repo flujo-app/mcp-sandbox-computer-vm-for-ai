@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-Kilntainers is an MCP server that gives LLM agents isolated Linux sandboxes for executing shell commands. It exposes a single tool — `sandbox_exec` — providing the full power of a Linux command line in an ephemeral, secure environment.
+Kilntainers is an MCP server that gives LLM agents isolated Linux sandboxes for executing shell commands. By default it exposes a single tool — `terminal_execute` — providing the full power of a Linux command line in an ephemeral, secure environment. Optional computer lifecycle tools can be enabled explicitly.
 
 **Scope of this document:** External behavior — the MCP tool interface, server configuration, connection lifecycle, backend behavioral contract, and security model. Not an architecture or implementation document.
 
@@ -18,9 +18,11 @@ Kilntainers is an MCP server that gives LLM agents isolated Linux sandboxes for 
 
 ---
 
-## 2. MCP Tool: `sandbox_exec`
+## 2. MCP Tool: `terminal_execute`
 
-Kilntainers exposes exactly one MCP tool: `sandbox_exec`. (D9)
+Kilntainers exposes exactly one MCP tool by default: `terminal_execute`. (D9)
+
+When `ENABLE_LIFECYCLE_TOOLS=true`, the server additionally exposes `computer_dashboard`, `computer_list`, `computer_create`, `computer_restart`, `computer_factory_reset`, and `computer_delete`, along with the dashboard MCP App resource. Any other value, or an unset variable, leaves these lifecycle tools disabled.
 
 ### 2.1 Input Schema
 
@@ -199,7 +201,7 @@ On startup, before accepting connections:
 
 Steps 1–2 are synchronous and complete before the server accepts any MCP connections. All validation failures are reported to stderr and cause the process to exit with a non-zero code.
 
-**Backend validation is deferred.** Backend prerequisite checks (e.g., `docker info`, image availability) are not performed at startup. They run automatically on the first `sandbox_exec` call, as part of lazy sandbox creation (see §4.3). This allows the server to start immediately and respond to non-exec MCP requests (`tools/list`, `initialize`, etc.) without waiting for container infrastructure. If backend validation fails on first exec, the error is returned as an MCP error (`isError: true`) with an actionable message.
+**Backend validation is deferred.** Backend prerequisite checks (e.g., `docker info`, image availability) are not performed at startup. They run automatically on the first `terminal_execute` call, as part of lazy sandbox creation (see §4.3). This allows the server to start immediately and respond to non-exec MCP requests (`tools/list`, `initialize`, etc.) without waiting for container infrastructure. If backend validation fails on first exec, the error is returned as an MCP error (`isError: true`) with an actionable message.
 
 ---
 
@@ -211,13 +213,13 @@ One sandbox for the lifetime of the server process. (D8)
 
 ```
 Process starts → validate config → accept MCP messages
-  → first sandbox_exec → start sandbox (validate backend, pull image if needed)
+  → first terminal_execute → start sandbox (validate backend, pull image if needed)
   → execute command → ... → stdin closes or SIGTERM → stop sandbox → exit
 ```
 
-**Lazy sandbox creation:** The server accepts MCP connections and responds to non-exec requests (`tools/list`, etc.) immediately after config validation. The sandbox is created on the first `sandbox_exec` call. Image pull happens during this first exec and blocks that call until complete. First run with a new image will be slow; subsequent runs use Docker's image cache. (D18)
+**Lazy sandbox creation:** The server accepts MCP connections and responds to non-exec requests (`tools/list`, etc.) immediately after config validation. The sandbox is created on the first `terminal_execute` call. Image pull happens during this first exec and blocks that call until complete. First run with a new image will be slow; subsequent runs use Docker's image cache. (D18)
 
-If no `sandbox_exec` is ever called during the session, no sandbox is created and no container resources are consumed.
+If no `terminal_execute` is ever called during the session, no sandbox is created and no container resources are consumed.
 
 ### 4.2 Streamable HTTP Transport
 
@@ -228,11 +230,11 @@ Server starts → validate config → listen on host:port
 
 Per session:
   initialize request → return session ID
-    → accept tool calls → first sandbox_exec → start sandbox
+    → accept tool calls → first terminal_execute → start sandbox
     → execute command → ... → session ends → stop sandbox (if started)
 ```
 
-**Lazy sandbox creation:** The `initialize` request completes immediately without creating a sandbox. The sandbox is created on the first `sandbox_exec` call within the session. If the session ends without any `sandbox_exec` calls, no sandbox resources are consumed.
+**Lazy sandbox creation:** The `initialize` request completes immediately without creating a sandbox. The sandbox is created on the first `terminal_execute` call within the session. If the session ends without any `terminal_execute` calls, no sandbox resources are consumed.
 
 Sessions are identified by the `Mcp-Session-Id` header per the MCP Streamable HTTP protocol. A session ends when:
 
@@ -244,7 +246,7 @@ Multiple sessions can be active simultaneously. Each has an independent sandbox 
 
 ### 4.3 Sandbox Startup Sequence
 
-Sandbox creation is **lazy** — it happens on the first `sandbox_exec` call, not at connection time. The full startup sequence runs when the first `sandbox_exec` is received:
+Sandbox creation is **lazy** — it happens on the first `terminal_execute` call, not at connection time. The full startup sequence runs when the first `terminal_execute` is received:
 
 1. **Validate backend prerequisites** (cached after first success) — e.g., verify the Docker daemon is reachable. (This was previously done at server startup.)
 2. **Pull image** if not locally available — blocking. (D18) Progress should be logged to stderr so the user knows something is happening.
@@ -252,11 +254,11 @@ Sandbox creation is **lazy** — it happens on the first `sandbox_exec` call, no
 4. **Verify readiness** — execute a trivial command (e.g., `echo kilntainers-ready`) to confirm the sandbox accepts exec calls.
 5. **Return the exec result** for the first command.
 
-**Concurrency:** If multiple `sandbox_exec` calls arrive before the sandbox is ready, only one sandbox is created. Concurrent calls wait for the same creation to complete.
+**Concurrency:** If multiple `terminal_execute` calls arrive before the sandbox is ready, only one sandbox is created. Concurrent calls wait for the same creation to complete.
 
 **Timeout isolation:** The command timeout parameter applies only to the command execution (step 5 conceptually), not to the sandbox startup time (steps 1–4). Sandbox startup has its own internal timeouts defined by the backend.
 
-**Failure handling:** If any startup step fails, the `sandbox_exec` call returns an MCP error (`isError: true`) with an actionable message. The session remains alive — subsequent `sandbox_exec` calls will retry sandbox creation. Once a sandbox is successfully created, it is used for all future calls in that session. If the sandbox dies after successful creation, the session is dead (see §4.5).
+**Failure handling:** If any startup step fails, the `terminal_execute` call returns an MCP error (`isError: true`) with an actionable message. The session remains alive — subsequent `terminal_execute` calls will retry sandbox creation. Once a sandbox is successfully created, it is used for all future calls in that session. If the sandbox dies after successful creation, the session is dead (see §4.5).
 
 **No sandbox for non-exec requests:** `tools/list`, `initialize`, and other MCP protocol requests never trigger sandbox creation. The server responds to these immediately.
 
@@ -304,7 +306,7 @@ Every backend must support these operations:
 | **Start sandbox** | Create and start an isolated sandbox. Return a sandbox object for subsequent operations. Each call creates an independent sandbox. (D28) |
 | **Stop sandbox** | Stop the sandbox and release all resources. Must be idempotent — safe to call on an already-stopped sandbox. |
 | **Execute** | Run a command in a specific sandbox. Accepts either a `command` string or `args` array, plus optional `stdin`, `working_directory`, `timeout`, and `output_limit`. Returns `{stdout, stderr, exit_code, exec_duration_ms}`. |
-| **Tool instructions** | Return a description string for the `sandbox_exec` tool, or null. Used to explain the specific capabilities of this sandbox ("a debian linux box" or "a busybox with these limited commands ..."). If null, the server requires `--tool-instruction-override` or it fails to start. (D9, D16) |
+| **Tool instructions** | Return a description string for the `terminal_execute` tool, or null. Used to explain the specific capabilities of this sandbox ("a debian linux box" or "a busybox with these limited commands ..."). If null, the server requires `--tool-instruction-override` or it fails to start. (D9, D16) |
 
 **Pythonic usage pattern:** The backend is an object; the sandbox it creates is also an object. Validate is a separate step because it may be async (e.g., checking if Docker is running). Start auto-validates if not already validated, so callers can't forget.
 
@@ -380,7 +382,7 @@ This ensures the interface won't need breaking changes when the mapped working d
 
 ## 6. Tool Description Assembly
 
-The `sandbox_exec` tool's `description` field — the text the LLM sees — is assembled at startup from up to three sources. (D16)
+The `terminal_execute` tool's `description` field — the text the LLM sees — is assembled at startup from up to three sources. (D16)
 
 **Assembly rules:**
 
@@ -503,7 +505,7 @@ kilntainers \
 
 *Note: this is just a draft we can refine later*
 
-*Note: `--gpu` and authentication are hypothetical examples of backend-specific flat args (D12). The MCP tool interface (`sandbox_exec` with the same parameters and response schema) is identical across backends. Only the backend's tool description changes to reflect the environment.*
+*Note: `--gpu` and authentication are hypothetical examples of backend-specific flat args (D12). The MCP tool interface (`terminal_execute` with the same parameters and response schema) is identical across backends. Only the backend's tool description changes to reflect the environment.*
 
 ---
 

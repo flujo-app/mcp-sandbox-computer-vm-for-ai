@@ -18,7 +18,7 @@ MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](http
 - 🧰 **Multiple backends:** Docker/Podman, native Fly Machines, [Modal](https://modal.com), [E2B](https://e2b.dev), and WebAssembly.
 - 🏝️ **Isolated per agent:** Every agent gets its own dedicated sandbox — no shared state, no cross-contamination.
 - 🔒 **Secure by design:** The agent communicates *with* the sandbox over MCP — it doesn’t run *inside* it. No agent API keys, code, or prompts are exposed to the sandbox.
-- 🔌 **Tool and UI access:** `sandbox_exec` stays simple, while provider-neutral lifecycle tools power both models and the dashboard.
+- 🔌 **Tool and UI access:** `terminal_execute` stays simple, while optional provider-neutral lifecycle tools power both models and the dashboard.
 - 📈 **Scalable:** Scale from a few agents on your laptop to thousands running in parallel in the cloud.
 
 ## Why sandbox computers?
@@ -52,11 +52,21 @@ Or add it to a JSON-based MCP client such as Claude Desktop:
 }
 ```
 
-Call `computer_dashboard` to open the MCP App. The dashboard has no external browser dependencies. Its internal resource URI remains `ui://kilntainers/computers` for compatibility with the upstream implementation.
+By default, the server exposes only `terminal_execute`. Set `ENABLE_LIFECYCLE_TOOLS=true` before starting the server to expose the `computer_*` tools and MCP App dashboard. For a JSON-based stdio client, add it to the server configuration:
+
+```json
+{
+  "env": {
+    "ENABLE_LIFECYCLE_TOOLS": "true"
+  }
+}
+```
+
+Then call `computer_dashboard` to open the App. The dashboard has no external browser dependencies. Its internal resource URI remains `ui://kilntainers/computers` for compatibility with the upstream implementation.
 
 ## Named computer lifecycle
 
-`sandbox_exec` accepts two additional optional inputs:
+`terminal_execute` accepts two additional optional inputs:
 
 - `computer_id`: a 1–63 character lowercase slug. The first call without one creates a readable random ID and reuses it as that MCP session's default.
 - `temporary`: defaults to `true`. Temporary computers are removed when the owning MCP session closes. Set it to `false` for a computer that survives server/session shutdown and can be reattached later by ID.
@@ -74,7 +84,7 @@ Every execution result includes `computer_id` and `temporary` next to stdout, st
 }
 ```
 
-Lifecycle tools are provider-neutral:
+Lifecycle tools are provider-neutral and are disabled unless `ENABLE_LIFECYCLE_TOOLS=true`:
 
 | Tool | Purpose |
 |---|---|
@@ -97,7 +107,7 @@ Lifecycle tools are provider-neutral:
 ```
 
 1. An MCP client starts MCP Sandbox Computer VM for AI over stdio or connects over HTTP
-2. On the first `sandbox_exec` call, the server creates a named isolated computer. Each connection gets its own random default unless it explicitly attaches by ID.
+2. On the first `terminal_execute` call, the server creates a named isolated computer. Each connection gets its own random default unless it explicitly attaches by ID.
 3. Commands run inside the sandbox; stdout, stderr, and exit code are returned
 4. When the session ends, temporary computers are destroyed; permanent computers remain provider-side.
 
@@ -120,7 +130,7 @@ uvx mcp-sandbox-computer-vm-for-ai --image node:22                # Node.js with
 uvx mcp-sandbox-computer-vm-for-ai --no-network                   # Disable networking
 ```
 
-### Docker Compose dashboard server
+### Docker Compose HTTP server
 
 The included image contains the Docker CLI and talks to the host daemon through its socket:
 
@@ -128,6 +138,8 @@ The included image contains the Docker CLI and talks to the host daemon through 
 docker compose up --build
 # Streamable HTTP MCP endpoint: http://127.0.0.1:8080/mcp
 ```
+
+Set `ENABLE_LIFECYCLE_TOOLS=true` in the Compose service environment when you want the optional dashboard and `computer_*` tools.
 
 `compose.yaml` binds only to loopback. For a remote listener, set `KILNTAINERS_AUTH_TOKEN` and send it as an `Authorization: Bearer …` header. Mounting the Docker socket grants the service control of the host Docker daemon; use a dedicated host or a restricted remote daemon in production.
 
@@ -257,7 +269,7 @@ core options:
 
 tool description:
   --tool-instruction-override TOOL_INSTRUCTION_OVERRIDE
-                        Replace the entire sandbox_exec tool description
+                        Replace the entire terminal_execute tool description
   --extended-tool-instruction EXTENDED_TOOL_INSTRUCTION
                         Append to the backend's default tool description
 

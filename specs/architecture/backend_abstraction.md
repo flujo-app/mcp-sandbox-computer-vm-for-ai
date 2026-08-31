@@ -301,7 +301,7 @@ class Backend(ABC):
 
     @abstractmethod
     def tool_instructions(self) -> str | None:
-        """Return tool description text for the sandbox_exec tool.
+        """Return tool description text for the terminal_execute tool.
 
         Returns a string describing this backend's sandbox capabilities,
         or None if the backend cannot provide a description (e.g.,

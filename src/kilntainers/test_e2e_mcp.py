@@ -123,15 +123,7 @@ class TestE2EStdioProtocol:
 
                 tools = response["result"].get("tools", [])
                 tool_names = {tool["name"] for tool in tools}
-                assert tool_names == {
-                    "sandbox_exec",
-                    "computer_dashboard",
-                    "computer_list",
-                    "computer_create",
-                    "computer_restart",
-                    "computer_factory_reset",
-                    "computer_delete",
-                }
+                assert tool_names == {"terminal_execute"}
                 assert all("description" in tool for tool in tools)
 
             finally:
@@ -197,7 +189,7 @@ class TestE2EStdioProtocol:
                     "id": 2,
                     "method": "tools/call",
                     "params": {
-                        "name": "sandbox_exec",
+                        "name": "terminal_execute",
                         "arguments": {"command": "echo hello world"},
                     },
                 }
@@ -288,7 +280,7 @@ class TestE2EErrorHandling:
                     "id": 2,
                     "method": "tools/call",
                     "params": {
-                        "name": "sandbox_exec",
+                        "name": "terminal_execute",
                         "arguments": {"command": "ls", "args": ["/bin/ls"]},
                     },
                 }

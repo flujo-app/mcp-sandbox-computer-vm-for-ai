@@ -163,8 +163,9 @@ def test_parser_invalid_types():
 # ================
 
 
-def test_build_configs_default_args():
+def test_build_configs_default_args(monkeypatch):
     """Test build_configs with default arguments."""
+    monkeypatch.delenv("ENABLE_LIFECYCLE_TOOLS", raising=False)
     parser = build_parser()
     args = parser.parse_args([])
 
@@ -182,6 +183,7 @@ def test_build_configs_default_args():
     assert server_config.session_timeout == 300
     assert server_config.tool_instruction_override is None
     assert server_config.extended_tool_instruction is None
+    assert server_config.enable_lifecycle_tools is False
 
     # Docker config defaults
     assert docker_config.engine == "docker"
@@ -259,6 +261,30 @@ def test_build_configs_timeout_in_both_configs():
 
     assert server_config.default_timeout == 300
     assert docker_config.default_timeout == 300
+
+
+@pytest.mark.parametrize("value", ["true", "TRUE", " True "])
+def test_build_configs_enables_lifecycle_tools_from_environment(
+    monkeypatch, value: str
+):
+    monkeypatch.setenv("ENABLE_LIFECYCLE_TOOLS", value)
+    parser = build_parser()
+
+    server_config, _backend_config = build_configs(parser.parse_args([]))
+
+    assert server_config.enable_lifecycle_tools is True
+
+
+@pytest.mark.parametrize("value", ["false", "1", "yes", "invalid", ""])
+def test_build_configs_disables_lifecycle_tools_unless_explicitly_true(
+    monkeypatch, value: str
+):
+    monkeypatch.setenv("ENABLE_LIFECYCLE_TOOLS", value)
+    parser = build_parser()
+
+    server_config, _backend_config = build_configs(parser.parse_args([]))
+
+    assert server_config.enable_lifecycle_tools is False
 
 
 def test_build_configs_docker_run_flags_not_provided():

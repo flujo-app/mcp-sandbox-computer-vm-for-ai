@@ -59,7 +59,7 @@ dependencies = [
 
 The MCP server layer lives in `src/kilntainers/server.py` and orchestrates:
 
-1. **Tool registration** — A single `sandbox_exec` tool with assembled description.
+1. **Tool registration** — A single `terminal_execute` tool with assembled description.
 2. **Request validation** — Input validation before delegating to the backend.
 3. **Response formatting** — Converting `ExecResult` to MCP tool response.
 4. **Error mapping** — Translating backend exceptions to appropriate MCP error responses.
@@ -69,7 +69,7 @@ The MCP server layer lives in `src/kilntainers/server.py` and orchestrates:
 ┌─────────────────────────────────────────┐
 │  MCP Client (LLM / IDE / Agent)         │
 └────────────────┬────────────────────────┘
-                 │ tools/call "sandbox_exec"
+                 │ tools/call "terminal_execute"
                  ▼
 ┌─────────────────────────────────────────┐
 │  FastMCP (transport + protocol)         │
@@ -79,7 +79,7 @@ The MCP server layer lives in `src/kilntainers/server.py` and orchestrates:
                  │ dispatches to tool handler
                  ▼
 ┌─────────────────────────────────────────┐
-│  server.py: sandbox_exec handler          │
+│  server.py: terminal_execute handler          │
 │  ├── validate inputs                    │
 │  ├── construct ExecRequest              │
 │  ├── call sandbox.exec()                │
@@ -97,7 +97,7 @@ The MCP server layer lives in `src/kilntainers/server.py` and orchestrates:
 
 The lifespan context manager is the bridge between the MCP server and the backend. It runs once per session — for stdio, that's the process lifetime; for HTTP, it's per `Mcp-Session-Id`.
 
-**Sandbox creation is lazy.** The lifespan does not create a sandbox on entry. Instead, it yields a `SessionContext` that creates the sandbox on the first `sandbox_exec` call. This allows the server to respond to `tools/list`, `initialize`, and other non-exec requests immediately.
+**Sandbox creation is lazy.** The lifespan does not create a sandbox on entry. Instead, it yields a `SessionContext` that creates the sandbox on the first `terminal_execute` call. This allows the server to respond to `tools/list`, `initialize`, and other non-exec requests immediately.
 
 ```python
 class SessionContext:
@@ -124,8 +124,8 @@ async def lifespan(server: FastMCP) -> AsyncIterator[SessionContext]:
 
 | Transport | Lifespan scope | Effect |
 |---|---|---|
-| stdio | One per process | One sandbox for the server's lifetime, created on first `sandbox_exec`. |
-| Streamable HTTP | One per session | Each client session gets its own sandbox. Created on first `sandbox_exec`, torn down on disconnect/idle timeout. |
+| stdio | One per process | One sandbox for the server's lifetime, created on first `terminal_execute`. |
+| Streamable HTTP | One per session | Each client session gets its own sandbox. Created on first `terminal_execute`, torn down on disconnect/idle timeout. |
 
 The `backend` object is created once during startup (before `FastMCP` is instantiated) and shared across all sessions. It's safe for concurrent `create_sandbox()` calls (Phase 2 §8). The complete `SessionContext` design (lazy creation, concurrency safety, death monitoring) is defined in `connection_lifecycle.md` §8.1.
 
@@ -144,7 +144,7 @@ The FastMCP instance is created during startup after CLI parsing, backend valida
 
 ---
 
-## 3. Tool: `sandbox_exec`
+## 3. Tool: `terminal_execute`
 
 ### 3.1 Registration
 
@@ -152,20 +152,20 @@ The tool is registered programmatically (not via decorator) because the descript
 
 ```python
 mcp.add_tool(
-    sandbox_exec_handler,
-    name="sandbox_exec",
+    terminal_execute_handler,
+    name="terminal_execute",
     description=assembled_description,
 )
 ```
 
-`assembled_description` is the result of tool description assembly (§4). `sandbox_exec_handler` is the async function that handles tool calls (§3.3).
+`assembled_description` is the result of tool description assembly (§4). `terminal_execute_handler` is the async function that handles tool calls (§3.3).
 
 ### 3.2 Input Schema
 
 FastMCP auto-generates the JSON schema from the handler function's type annotations:
 
 ```python
-async def sandbox_exec_handler(
+async def terminal_execute_handler(
     command: str | None = None,
     args: list[str] | None = None,
     stdin: str | None = None,
@@ -200,7 +200,7 @@ from mcp.types import CallToolResult, TextContent
 STDIN_LIMIT = 2 * 1024 * 1024  # 2 MiB (D32)
 
 
-async def sandbox_exec_handler(
+async def terminal_execute_handler(
     command: str | None = None,
     args: list[str] | None = None,
     stdin: str | None = None,
@@ -208,7 +208,7 @@ async def sandbox_exec_handler(
     timeout: int | None = None,
     ctx: Context[ServerSession, SessionContext] = ...,
 ) -> CallToolResult:
-    """Handle a sandbox_exec tool call."""
+    """Handle a terminal_execute tool call."""
 
     # --- Input validation ---
     error = _validate_inputs(command, args, stdin, working_directory, timeout)
@@ -262,7 +262,7 @@ async def sandbox_exec_handler(
     )
 ```
 
-**Lazy creation note:** The `get_or_create_sandbox()` call is the trigger for sandbox creation on the first `sandbox_exec`. Subsequent calls return the existing sandbox immediately. The command timeout in `ExecRequest` applies only to `sandbox.exec()`, not to sandbox creation — creation has its own internal timeouts.
+**Lazy creation note:** The `get_or_create_sandbox()` call is the trigger for sandbox creation on the first `terminal_execute`. Subsequent calls return the existing sandbox immediately. The command timeout in `ExecRequest` applies only to `sandbox.exec()`, not to sandbox creation — creation has its own internal timeouts.
 
 ### 3.4 Input Validation
 
@@ -352,7 +352,7 @@ def assemble_tool_description(
     override: str | None,
     extended: str | None,
 ) -> str:
-    """Assemble the sandbox_exec tool description.
+    """Assemble the terminal_execute tool description.
 
     Raises BackendError if the result would be empty.
     """
@@ -444,9 +444,9 @@ Phase 5 (CLI & configuration) covers argument validation, including rejecting HT
 **Tool call request (`tools/call`):**
 
 ```
-1. MCP client sends tools/call { name: "sandbox_exec", arguments: {...} }
+1. MCP client sends tools/call { name: "terminal_execute", arguments: {...} }
 2. MCP SDK deserializes, routes to call_tool handler
-3. FastMCP resolves the tool, injects Context, calls sandbox_exec_handler()
+3. FastMCP resolves the tool, injects Context, calls terminal_execute_handler()
 4. Handler validates inputs
    ├── Invalid → return CallToolResult(isError=true, message)
    └── Valid → continue
@@ -530,13 +530,13 @@ The full startup sequence, from process launch to accepting connections. Phase 5
    └── backend.tool_instructions() + overrides. Fail if empty.
 4. Create FastMCP instance                     (§2.3)
    └── With lifespan, host, port.
-5. Register sandbox_exec tool                  (§3.1)
+5. Register terminal_execute tool                  (§3.1)
    └── mcp.add_tool() with assembled description.
 6. Run transport                               (§5)
    └── mcp.run(transport=...) — blocks until shutdown.
 ```
 
-**No eager backend validation.** Backend prerequisites (Docker daemon reachable, etc.) are validated lazily on the first `sandbox_exec` call, as part of `backend.create_sandbox()`. This allows the server to start and respond to `tools/list` immediately. See `connection_lifecycle.md` §8 for the lazy creation design.
+**No eager backend validation.** Backend prerequisites (Docker daemon reachable, etc.) are validated lazily on the first `terminal_execute` call, as part of `backend.create_sandbox()`. This allows the server to start and respond to `tools/list` immediately. See `connection_lifecycle.md` §8 for the lazy creation design.
 
 Steps 2–3 happen before FastMCP is created. If any step fails, the process exits with a clear error message on stderr and a non-zero exit code.
 
@@ -551,7 +551,7 @@ All MCP server logic lives in `src/kilntainers/server.py`. This module exports:
 | Component | Purpose |
 |---|---|
 | `create_server()` | Factory function: creates and configures the FastMCP instance with tool registered. Called by CLI startup. |
-| `sandbox_exec_handler()` | The tool handler function. |
+| `terminal_execute_handler()` | The tool handler function. |
 | `assemble_tool_description()` | Tool description assembly logic. |
 | `SessionContext` | Dataclass for per-session lifespan context. |
 | `app_lifespan()` | Lifespan context manager. |
@@ -609,14 +609,14 @@ def create_server(
     handler = _create_handler(config)
     mcp.add_tool(
         handler,
-        name="sandbox_exec",
+        name="terminal_execute",
         description=description,
     )
 
     return mcp
 ```
 
-The `_create_handler` function creates the `sandbox_exec_handler` with server config bound via closure, avoiding global state.
+The `_create_handler` function creates the `terminal_execute_handler` with server config bound via closure, avoiding global state.
 
 ---
 
@@ -676,7 +676,7 @@ Using `MockSandbox` to capture the `ExecRequest` passed to `exec()`:
 
 #### Server Factory
 
-- `create_server()` returns a FastMCP instance with one tool named "sandbox_exec".
+- `create_server()` returns a FastMCP instance with one tool named "terminal_execute" by default. When `ServerConfig.enable_lifecycle_tools` is true, it also registers the six `computer_*` lifecycle tools and dashboard resource.
 - Tool has the assembled description.
 
 ### 10.2 Integration with Backend Tests
@@ -700,7 +700,7 @@ async def server_with_mock():
     mcp = create_server(mock_backend, config)
     return mcp, mock_backend
 
-async def test_sandbox_exec_command_mode(server_with_mock):
+async def test_terminal_execute_command_mode(server_with_mock):
     mcp, mock_backend = server_with_mock
     # Configure mock to return a specific ExecResult
     mock_backend.mock_sandbox.exec_results.append(
@@ -709,7 +709,7 @@ async def test_sandbox_exec_command_mode(server_with_mock):
 
     # Call the tool handler directly
     result = await mcp._tool_manager.call_tool(
-        "sandbox_exec",
+        "terminal_execute",
         {"command": "echo hello"},
         context=mcp.get_context(),
     )
@@ -717,7 +717,7 @@ async def test_sandbox_exec_command_mode(server_with_mock):
     ...
 ```
 
-Alternatively, tests can call `sandbox_exec_handler()` directly with a mock Context, which is simpler and more focused. The `_tool_manager` approach tests the full FastMCP dispatch path. Both approaches have value; the direct approach is preferred for validation and formatting tests, the manager approach for integration-level tests.
+Alternatively, tests can call `terminal_execute_handler()` directly with a mock Context, which is simpler and more focused. The `_tool_manager` approach tests the full FastMCP dispatch path. Both approaches have value; the direct approach is preferred for validation and formatting tests, the manager approach for integration-level tests.
 
 ---
 

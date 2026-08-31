@@ -204,7 +204,7 @@ Runtime errors occur after the server is accepting connections. They are returne
 ### 5.1 Tool Call Error Flow
 
 ```
-MCP tool call arrives (tools/call "sandbox_exec")
+MCP tool call arrives (tools/call "terminal_execute")
   │
   ├── Input validation (server.py: _validate_inputs)
   │     ├── Both command and args → isError: true
@@ -339,7 +339,7 @@ See Phase 6 §6 for the full death propagation architecture.
 If an unexpected exception occurs during a tool call (a bug in Kilntainers code, or an unanticipated backend failure), it should be caught at the handler level and returned as `isError: true` rather than crashing the server.
 
 ```python
-async def sandbox_exec_handler(...) -> CallToolResult:
+async def terminal_execute_handler(...) -> CallToolResult:
     # ... validation ...
     try:
         result = await sandbox.exec(request)

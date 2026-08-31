@@ -4,20 +4,20 @@
 
 MCP requests like `tools/list` and `initialize` currently block on sandbox creation (image pull, container start, readiness check). This means the server takes many seconds to respond to any MCP request, even those that don't need a sandbox. This is a poor user experience — MCP clients appear hung during container startup.
 
-**Goal:** The server should respond to all MCP requests except `sandbox_exec` without starting a container. The sandbox is created lazily on the first `sandbox_exec` call.
+**Goal:** The server should respond to all MCP requests except `terminal_execute` without starting a container. The sandbox is created lazily on the first `terminal_execute` call.
 
 ## Design
 
 ### Core Change
 
-Move sandbox creation from the lifespan entry (eager) to the first `sandbox_exec` tool call (lazy). The `SessionContext` becomes the owner of lazy sandbox lifecycle, including concurrency-safe creation and cleanup.
+Move sandbox creation from the lifespan entry (eager) to the first `terminal_execute` tool call (lazy). The `SessionContext` becomes the owner of lazy sandbox lifecycle, including concurrency-safe creation and cleanup.
 
 ### Key Properties
 
-1. **Lazy creation**: No sandbox is created until the first `sandbox_exec` call. `tools/list`, `initialize`, and all other MCP requests work immediately.
-2. **Concurrency safe**: An `asyncio.Lock` ensures only one sandbox is created per session, even if multiple `sandbox_exec` calls arrive simultaneously.
+1. **Lazy creation**: No sandbox is created until the first `terminal_execute` call. `tools/list`, `initialize`, and all other MCP requests work immediately.
+2. **Concurrency safe**: An `asyncio.Lock` ensures only one sandbox is created per session, even if multiple `terminal_execute` calls arrive simultaneously.
 3. **Timeout isolation**: The command timeout (`ExecRequest.timeout`) applies only to the `sandbox.exec()` call, not to sandbox startup. Sandbox creation has its own internal timeouts (e.g., `docker run` 30s, readiness check 15s).
-4. **Retry on creation failure**: If sandbox creation fails on the first `sandbox_exec`, the error is returned for that call. Subsequent `sandbox_exec` calls will retry creation. Once a sandbox is successfully created, it's used for all future calls. If the sandbox dies after creation, the session is dead (existing behavior via `SandboxDiedError`).
+4. **Retry on creation failure**: If sandbox creation fails on the first `terminal_execute`, the error is returned for that call. Subsequent `terminal_execute` calls will retry creation. Once a sandbox is successfully created, it's used for all future calls. If the sandbox dies after creation, the session is dead (existing behavior via `SandboxDiedError`).
 5. **Deferred validation**: `backend.validate()` is no longer called eagerly at startup. It runs automatically inside `backend.create_sandbox()` on first exec (the base class `create_sandbox()` calls `validate()` which is cached after first success).
 6. **All backends**: This is a server-layer change. Docker, WASM, Modal — all backends benefit. No backend code changes needed.
 
@@ -232,7 +232,7 @@ Note: `BackendError` is already imported in `server.py`. The `get_or_create_sand
 
 ### Task 4: Remove eager backend validation from `cli.py`
 
-Remove the `_validate_backend()` call from `main()`. Validation now happens lazily inside `backend.create_sandbox()` on first `sandbox_exec`.
+Remove the `_validate_backend()` call from `main()`. Validation now happens lazily inside `backend.create_sandbox()` on first `terminal_execute`.
 
 **In `main()`**, remove:
 

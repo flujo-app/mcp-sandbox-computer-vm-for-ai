@@ -245,7 +245,7 @@ If the readiness check fails (container started but shell not found), the error 
 
 ### 4.4 Tool Instructions
 
-Returns the tool description for the `sandbox_exec` tool, with dynamic values from configuration. (Functional spec §7)
+Returns the tool description for the `terminal_execute` tool, with dynamic values from configuration. (Functional spec §7)
 
 ```python
 DEFAULT_IMAGE = "debian:bookworm-slim"

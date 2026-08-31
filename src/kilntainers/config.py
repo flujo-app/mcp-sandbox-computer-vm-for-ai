@@ -1,9 +1,15 @@
 """Configuration dataclasses."""
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from typing import Literal
 
 Transport = Literal["stdio", "http"]
+
+
+def _lifecycle_tools_enabled() -> bool:
+    """Read the opt-in lifecycle tool feature flag from the environment."""
+    return os.getenv("ENABLE_LIFECYCLE_TOOLS", "false").strip().casefold() == "true"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -38,6 +44,9 @@ class ServerConfig:
     # Tool description
     tool_instruction_override: str | None = None
     extended_tool_instruction: str | None = None
+
+    # Optional MCP surface
+    enable_lifecycle_tools: bool = field(default_factory=_lifecycle_tools_enabled)
 
     # Session management (HTTP only)
     session_timeout: int = 300  # seconds (5 minutes)
