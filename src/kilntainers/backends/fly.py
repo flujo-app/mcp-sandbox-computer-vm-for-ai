@@ -8,6 +8,7 @@ import os
 import shlex
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import cast
 
 from kilntainers.backends.base import (
@@ -20,6 +21,7 @@ from kilntainers.backends.base import (
 from kilntainers.computers import random_computer_id
 from kilntainers.config import BackendConfig
 from kilntainers.errors import BackendError, SandboxDiedError
+from kilntainers.fly_runtime import ensure_flyctl
 
 DEFAULT_FLY_IMAGE = "debian:bookworm-slim"
 COMPUTER_ID_METADATA = "kilntainers-computer-id"
@@ -33,6 +35,7 @@ class FlyBackendConfig(BackendConfig):
 
     fly_cli: str = "fly"
     app: str | None = None
+    org: str | None = None
     token: str | None = None
     image: str = DEFAULT_FLY_IMAGE
     region: str | None = None
@@ -64,7 +67,15 @@ class FlyBackend(Backend):
         group.add_argument(
             "--fly-app",
             default=os.getenv("FLY_APP_NAME"),
-            help="Fly App that owns sandbox Machines (default: FLY_APP_NAME)",
+            help=(
+                "Fly App that owns sandbox Machines (default: FLY_APP_NAME, "
+                "otherwise create and remember one automatically)"
+            ),
+        )
+        group.add_argument(
+            "--fly-org",
+            default=os.getenv("FLY_ORG"),
+            help="Fly organization (default: FLY_ORG, personal, or first available)",
         )
         group.add_argument(
             "--fly-token",
@@ -112,6 +123,7 @@ class FlyBackend(Backend):
         return FlyBackendConfig(
             fly_cli=args.fly_cli,
             app=args.fly_app,
+            org=args.fly_org,
             token=args.fly_token,
             image=args.fly_image,
             region=args.fly_region,
@@ -126,6 +138,13 @@ class FlyBackend(Backend):
     def __init__(self, config: FlyBackendConfig) -> None:
         super().__init__(config)
         self._config: FlyBackendConfig = config
+        self._fly_cli = config.fly_cli
+        self._app = config.app
+
+    @property
+    def app(self) -> str | None:
+        """Resolved Fly App, including an automatically created app."""
+        return self._app
 
     def _fly_env(self) -> dict[str, str]:
         env = os.environ.copy()
@@ -140,7 +159,7 @@ class FlyBackend(Backend):
         timeout: float = 60,
     ) -> tuple[int, bytes, bytes]:
         """Run flyctl without putting the API token in the process arguments."""
-        cmd = [self._config.fly_cli, *args]
+        cmd = [self._fly_cli, *args]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -151,8 +170,8 @@ class FlyBackend(Backend):
             )
         except FileNotFoundError:
             raise BackendError(
-                f"Fly CLI '{self._config.fly_cli}' was not found. Install flyctl "
-                "or pass --fly-cli."
+                f"Fly CLI '{self._fly_cli}' was not found. Install flyctl or pass "
+                "--fly-cli."
             )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -171,31 +190,168 @@ class FlyBackend(Backend):
             )
         return proc.returncode, stdout, stderr
 
+    @staticmethod
+    def _json_rows(payload: object, *container_names: str) -> list[dict[str, object]]:
+        if isinstance(payload, dict):
+            payload_dict = cast("dict[str, object]", payload)
+            for name in container_names:
+                nested = payload_dict.get(name)
+                if isinstance(nested, list):
+                    payload = nested
+                    break
+        if not isinstance(payload, list):
+            return []
+        return [cast("dict[str, object]", row) for row in payload if isinstance(row, dict)]
+
+    @staticmethod
+    def _named_value(row: dict[str, object], *names: str) -> str | None:
+        for name in names:
+            value = row.get(name)
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    @staticmethod
+    def _state_file() -> Path:
+        override = os.getenv("KILNTAINERS_FLY_STATE_FILE")
+        if override:
+            return Path(override).expanduser()
+        return Path.home() / ".mcp-sandbox-computer-vm-for-ai" / "fly.json"
+
+    def _load_saved_app(self) -> str | None:
+        try:
+            payload = json.loads(self._state_file().read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict):
+            return None
+        app = payload.get("app")
+        return app if isinstance(app, str) and app else None
+
+    def _save_app(self, app: str) -> None:
+        destination = self._state_file()
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"app": app}, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(destination)
+
+    async def _visible_apps(self) -> set[str]:
+        _, stdout, _ = await self._run_fly("apps", "list", "--json", timeout=20)
+        try:
+            payload = json.loads(stdout.decode("utf-8") or "[]")
+        except json.JSONDecodeError as error:
+            raise BackendError("Fly CLI returned invalid app inventory JSON.") from error
+        rows = self._json_rows(payload, "apps", "Apps")
+        return {
+            name
+            for row in rows
+            if (name := self._named_value(row, "name", "Name", "app_name", "AppName"))
+        }
+
+    async def _default_org(self) -> str:
+        if self._config.org:
+            return self._config.org
+        _, stdout, _ = await self._run_fly("orgs", "list", "--json", timeout=20)
+        try:
+            payload = json.loads(stdout.decode("utf-8") or "[]")
+        except json.JSONDecodeError as error:
+            raise BackendError("Fly CLI returned invalid organization JSON.") from error
+        rows = self._json_rows(payload, "orgs", "Orgs", "organizations")
+        slugs = [
+            slug
+            for row in rows
+            if (slug := self._named_value(row, "slug", "Slug", "name", "Name"))
+        ]
+        if isinstance(payload, dict) and not slugs:
+            # Current flyctl releases return {"slug": "display name"} here.
+            slugs = [
+                slug
+                for slug, display_name in payload.items()
+                if isinstance(slug, str)
+                and slug
+                and isinstance(display_name, str)
+            ]
+        if not slugs:
+            raise BackendError(
+                "No Fly organization is available for this account. Create one in "
+                "Fly.io or set FLY_ORG."
+            )
+        return "personal" if "personal" in slugs else slugs[0]
+
+    async def _create_app(self) -> str:
+        org = await self._default_org()
+        _, stdout, _ = await self._run_fly(
+            "apps",
+            "create",
+            "--generate-name",
+            "--org",
+            org,
+            "--json",
+            "--yes",
+            timeout=45,
+        )
+        try:
+            payload = json.loads(stdout.decode("utf-8") or "{}")
+        except json.JSONDecodeError as error:
+            raise BackendError("Fly created an app but returned invalid JSON.") from error
+        rows = self._json_rows(payload, "apps", "Apps")
+        if isinstance(payload, dict):
+            rows.insert(0, cast("dict[str, object]", payload))
+        app = next(
+            (
+                name
+                for row in rows
+                if (name := self._named_value(row, "name", "Name", "app_name", "AppName"))
+            ),
+            None,
+        )
+        if not app:
+            raise BackendError("Fly created an app but did not return its name.")
+        self._save_app(app)
+        return app
+
+    async def _resolve_app(self) -> None:
+        visible = await self._visible_apps()
+        if self._app:
+            if self._app not in visible:
+                raise BackendError(
+                    f"Fly App '{self._app}' is not visible to the current account or token."
+                )
+            return
+        saved = self._load_saved_app()
+        if saved and saved in visible:
+            self._app = saved
+            return
+        self._app = await self._create_app()
+
     async def _validate(self) -> None:
-        if not self._config.app:
-            raise BackendError(
-                "Fly backend requires --fly-app or the FLY_APP_NAME environment variable."
-            )
-        if not self._config.token:
-            raise BackendError(
-                "Fly backend requires --fly-token, FLY_API_TOKEN, or FLY_TOKEN. "
-                "Use an app-scoped deploy token where possible."
-            )
         if self._config.cpus < 1:
             raise BackendError("--fly-cpus must be at least 1.")
         if self._config.memory_mb < 256:
             raise BackendError("--fly-memory must be at least 256 MB.")
+        self._fly_cli = await asyncio.to_thread(ensure_flyctl, self._config.fly_cli)
         await self._run_fly("version", timeout=10)
+        returncode, _, stderr = await self._run_fly(
+            "auth", "whoami", "--json", check=False, timeout=20
+        )
+        if returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            raise BackendError(
+                "flyctl is installed but is not signed in. Run "
+                f"'{self._fly_cli} auth login' once, or set FLY_API_TOKEN."
+                + (f"\n{detail}" if detail else "")
+            )
+        await self._resolve_app()
         await self._list_machine_rows()
 
     async def _list_machine_rows(self) -> list[dict[str, object]]:
-        if not self._config.app:
+        if not self._app:
             return []
         _, stdout, _ = await self._run_fly(
             "machine",
             "list",
             "--app",
-            self._config.app,
+            self._app,
             "--json",
             timeout=20,
         )
@@ -258,7 +414,7 @@ class FlyBackend(Backend):
         computer_id: str | None = None,
         temporary: bool = True,
     ) -> "FlySandbox":
-        if not self._config.app:  # validated by create_sandbox
+        if not self._app:  # validated by create_sandbox
             raise BackendError("Fly App is not configured.")
         computer_id = computer_id or random_computer_id()
         if self._computer_row(await self._list_machine_rows(), computer_id) is not None:
@@ -272,7 +428,7 @@ class FlyBackend(Backend):
             "machine",
             "run",
             "--app",
-            self._config.app,
+            self._app,
             "--name",
             computer_id,
             "--detach",
@@ -336,9 +492,9 @@ class FlyBackend(Backend):
         state = str(self._value(row, "state", "State") or "").lower()
         machine_id = str(self._value(row, "id", "ID", "machine_id") or "")
         if state not in {"started", "running"}:
-            assert self._config.app is not None
+            assert self._app is not None
             await self._run_fly(
-                "machine", "start", machine_id, "--app", self._config.app, timeout=45
+                "machine", "start", machine_id, "--app", self._app, timeout=45
             )
             row = self._computer_row(await self._list_machine_rows(), computer_id)
             if row is None:  # pragma: no cover - provider race
@@ -380,10 +536,10 @@ class FlyBackend(Backend):
         row = self._computer_row(await self._list_machine_rows(), computer_id)
         if row is None:
             return None
-        assert self._config.app is not None
+        assert self._app is not None
         machine_id = str(self._value(row, "id", "ID", "machine_id") or "")
         await self._run_fly(
-            "machine", "restart", machine_id, "--app", self._config.app, timeout=60
+            "machine", "restart", machine_id, "--app", self._app, timeout=60
         )
         refreshed = self._computer_row(await self._list_machine_rows(), computer_id)
         if refreshed is None:  # pragma: no cover - provider race
@@ -394,14 +550,14 @@ class FlyBackend(Backend):
         row = self._computer_row(await self._list_machine_rows(), computer_id)
         if row is None:
             return False
-        assert self._config.app is not None
+        assert self._app is not None
         machine_id = str(self._value(row, "id", "ID", "machine_id") or "")
         await self._run_fly(
             "machine",
             "destroy",
             "--force",
             "--app",
-            self._config.app,
+            self._app,
             machine_id,
             timeout=60,
         )
@@ -457,16 +613,19 @@ class FlySandbox(Sandbox):
 
     def _remote_command(self, request: ExecRequest) -> str:
         if request.command is not None:
-            command = f"{shlex.quote(self._backend._config.shell)} -c {shlex.quote(request.command)}"
+            command = request.command
         else:
             assert request.args is not None
             command = shlex.join(request.args)
-        if request.working_directory:
-            command = f"cd -- {shlex.quote(request.working_directory)} && {command}"
         if request.stdin is not None:
             encoded = base64.b64encode(request.stdin.encode("utf-8")).decode("ascii")
             command = f"printf %s {shlex.quote(encoded)} | base64 -d | {command}"
-        return command
+        if request.working_directory:
+            command = f"cd -- {shlex.quote(request.working_directory)} && {command}"
+        # fly machine exec tokenizes its command rather than evaluating shell
+        # operators. Wrap every request so cwd, stdin, pipes, and argv quoting
+        # retain their normal shell semantics on every host OS.
+        return f"{shlex.quote(self._backend._config.shell)} -lc {shlex.quote(command)}"
 
     @staticmethod
     def _exec_payload(payload: object) -> dict[str, object] | None:
@@ -483,14 +642,14 @@ class FlySandbox(Sandbox):
         return result
 
     async def _do_exec(self, request: ExecRequest) -> ExecResult:
-        if not self._backend._config.app:
+        if not self._backend.app:
             raise BackendError("Fly App is not configured.")
         started = time.monotonic()
         returncode, stdout, stderr = await self._backend._run_fly(
             "machine",
             "exec",
             "--app",
-            self._backend._config.app,
+            self._backend.app,
             "--json",
             "--timeout",
             str(request.timeout),
@@ -567,7 +726,7 @@ class FlySandbox(Sandbox):
             return
         self._stopped = True
         self._stop_requested = True
-        if not self._backend._config.app:
+        if not self._backend.app:
             return
         try:
             if self._temporary:
@@ -576,7 +735,7 @@ class FlySandbox(Sandbox):
                     "destroy",
                     "--force",
                     "--app",
-                    self._backend._config.app,
+                    self._backend.app,
                     self._machine_id,
                     timeout=60,
                 )
@@ -586,7 +745,7 @@ class FlySandbox(Sandbox):
                     "stop",
                     self._machine_id,
                     "--app",
-                    self._backend._config.app,
+                    self._backend.app,
                     timeout=45,
                 )
         except BackendError:

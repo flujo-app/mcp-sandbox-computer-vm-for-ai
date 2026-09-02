@@ -1,18 +1,18 @@
 {
   "mcpServers": {
-    "hooks_mcp": {
+    "sandbox-computer-fly": {
       "type": "stdio",
-      "command": "uvx",
+      "command": "uv",
       "args": [
-        "hooks-mcp"
+        "run",
+        "mcp-sandbox-computer-vm-for-ai",
+        "--backend",
+        "fly"
       ],
-      "env": {}
-    },
-    "kilntainers": {
-      "type": "stdio",
-      "command": "kilntainers",
-      "args": [],
-      "env": {}
+      "env": {
+        "ENABLE_LIFECYCLE_TOOLS": "true",
+        "AUTO_INSTALL_FLYCTL": "true"
+      }
     }
   }
 }

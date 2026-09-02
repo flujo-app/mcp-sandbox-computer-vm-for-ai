@@ -145,22 +145,56 @@ Set `ENABLE_LIFECYCLE_TOOLS=true` in the Compose service environment when you wa
 
 ### Fly Machines
 
-Fly.io deploys a Docker image as a VM root filesystem and does not run a nested Docker daemon. The `fly` backend therefore provisions real [Fly Machines](https://fly.io/docs/machines/) through `flyctl`: temporary Machines use disposable root filesystems, while permanent Machines use `persist_rootfs=always`.
+Fly.io deploys OCI images as VM root filesystems. The `fly` backend provisions real [Fly Machines](https://fly.io/docs/machines/) through `flyctl`: temporary Machines use disposable root filesystems, while permanent Machines use `persist_rootfs=always`.
+
+The normal setup is local stdio MCP with remote Fly Machines. There are no required app, region, CPU, or memory choices:
+
+```bash
+uvx mcp-sandbox-computer-vm-for-ai --backend fly
+```
+
+On first use the backend:
+
+- uses an existing `fly` or `flyctl`, or downloads the current official release to `~/.fly/bin` (set `AUTO_INSTALL_FLYCTL=false` to opt out);
+- uses your cached `fly auth login` session, `FLY_API_TOKEN`, or `FLY_TOKEN`;
+- chooses the `personal` organization when available, otherwise the first organization on the account;
+- creates a generated Fly App once and remembers it in `~/.mcp-sandbox-computer-vm-for-ai/fly.json`;
+- lets Fly choose the region and uses one shared CPU with 512 MB by default.
+
+Authentication is the only unavoidable account step. On a genuinely fresh machine, start the MCP once so it installs flyctl, then run the exact `flyctl auth login` command shown by its error and restart the MCP client. CI can set `FLY_API_TOKEN` instead. `FLY_ORG`, `FLY_APP_NAME`, `FLY_REGION`, and the `--fly-*` flags remain optional overrides.
+
+This repository's [`.mcp.json`](.mcp.json) is ready for Fly mode and runs the local checkout with lifecycle tools enabled. For a client outside the checkout, use this equivalent configuration:
+
+```json
+{
+  "mcpServers": {
+    "sandbox-computer-fly": {
+      "command": "uvx",
+      "args": ["mcp-sandbox-computer-vm-for-ai", "--backend", "fly"],
+      "env": {
+        "ENABLE_LIFECYCLE_TOOLS": "true",
+        "AUTO_INSTALL_FLYCTL": "true"
+      }
+    }
+  }
+}
+```
+
+The first `terminal_execute` call creates a temporary Machine. To keep its root filesystem, pass a stable `computer_id` and `temporary=false` (or create a permanent computer in the dashboard).
+
+#### Hosted MCP controller (advanced)
+
+The included `fly.toml` can still host the MCP HTTP controller itself. This requires an app-scoped deploy token inside that controller because a Fly Machine cannot use your laptop's cached login:
 
 ```bash
 fly apps create mcp-sandbox-computer-vm-for-ai
-
-# Use an app-scoped token for Machine list/create/exec/destroy operations.
 fly secrets set -a mcp-sandbox-computer-vm-for-ai \
   FLY_API_TOKEN="$(fly tokens create deploy -a mcp-sandbox-computer-vm-for-ai)" \
   KILNTAINERS_AUTH_TOKEN="$(openssl rand -hex 32)"
-
 fly deploy
 ```
 
-The MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`. Configure the same `KILNTAINERS_AUTH_TOKEN` as a bearer header in the MCP client. `fly.toml` keeps the controller Machine running because it owns MCP sessions and cleanup; sandbox Machines are standalone Machines distinguished by project metadata and are not part of the controller process group.
-
-The included `fly.toml` defaults to Fly's São Paulo region (`gru`). Change `primary_region` and, when needed, `FLY_REGION` if you want the controller and newly created sandbox Machines in another supported region.
+The remote MCP endpoint is `https://mcp-sandbox-computer-vm-for-ai.fly.dev/mcp`; send `KILNTAINERS_AUTH_TOKEN` as a bearer token. The checked-in controller config uses `gru`, but local stdio mode does not choose a region unless you explicitly set one.
 
 ### Cloud Containers & VMs
 

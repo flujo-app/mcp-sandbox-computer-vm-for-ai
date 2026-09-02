@@ -1,6 +1,7 @@
 """Unit tests for the Fly Machines backend (no Fly account required)."""
 
 import json
+import shlex
 
 import pytest
 
@@ -39,13 +40,54 @@ def machine_row(
 
 
 @pytest.mark.asyncio
-async def test_validate_requires_app_and_token() -> None:
+async def test_validate_installs_cli_and_creates_default_app(
+    monkeypatch, tmp_path
+) -> None:
     backend = FlyBackend(FlyBackendConfig(app=None, token=None))
-    with pytest.raises(BackendError, match="--fly-app"):
-        await backend.validate()
+    calls: list[tuple[str, ...]] = []
 
-    backend = FlyBackend(FlyBackendConfig(app="sandbox-app", token=None))
-    with pytest.raises(BackendError, match="FLY_API_TOKEN"):
+    monkeypatch.setenv("KILNTAINERS_FLY_STATE_FILE", str(tmp_path / "fly.json"))
+    monkeypatch.setattr(
+        "kilntainers.backends.fly.ensure_flyctl", lambda command: "/tools/flyctl"
+    )
+
+    async def fake_run(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("apps", "list"):
+            return 0, b"[]", b""
+        if args[:2] == ("orgs", "list"):
+            return 0, b'{"personal":"account@example.com"}', b""
+        if args[:2] == ("apps", "create"):
+            return 0, b'{"Name":"generated-fly-app"}', b""
+        if args[:2] == ("machine", "list"):
+            return 0, b"[]", b""
+        return 0, b"{}", b""
+
+    monkeypatch.setattr(backend, "_run_fly", fake_run)
+    await backend.validate()
+
+    assert backend.app == "generated-fly-app"
+    assert backend._fly_cli == "/tools/flyctl"
+    assert ("apps", "create", "--generate-name", "--org", "personal", "--json", "--yes") in calls
+    assert json.loads((tmp_path / "fly.json").read_text()) == {
+        "app": "generated-fly-app"
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_explains_one_time_login(monkeypatch) -> None:
+    backend = FlyBackend(FlyBackendConfig(app=None, token=None))
+    monkeypatch.setattr(
+        "kilntainers.backends.fly.ensure_flyctl", lambda command: "/tools/flyctl"
+    )
+
+    async def fake_run(*args, **kwargs):
+        if args[:2] == ("auth", "whoami"):
+            return 1, b"", b"not logged in"
+        return 0, b"{}", b""
+
+    monkeypatch.setattr(backend, "_run_fly", fake_run)
+    with pytest.raises(BackendError, match="/tools/flyctl auth login"):
         await backend.validate()
 
 
@@ -164,7 +206,7 @@ async def test_fly_exec_parses_machine_json(monkeypatch) -> None:
     assert result.stdout == "out\n"
     assert result.stderr == "err\n"
     assert calls[0][:2] == ("machine", "exec")
-    assert "/bin/bash -c" in calls[0][-1]
+    assert "/bin/bash -lc" in calls[0][-1]
 
 
 def test_remote_command_supports_workdir_args_and_stdin() -> None:
@@ -187,6 +229,8 @@ def test_remote_command_supports_workdir_args_and_stdin() -> None:
             output_limit=4096,
         )
     )
-    assert "cd -- '/workspace dir'" in command
-    assert "base64 -d" in command
-    assert "cat 'file with spaces'" in command
+    argv = shlex.split(command)
+    assert argv[:2] == ["/bin/bash", "-lc"]
+    assert argv[2].startswith("cd -- '/workspace dir' && printf %s ")
+    assert "base64 -d" in argv[2]
+    assert "cat 'file with spaces'" in argv[2]
