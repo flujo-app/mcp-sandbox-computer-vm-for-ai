@@ -121,6 +121,77 @@ async def stdio(backend, directory):
             flush=True,
         )
 
+    await stdio_signal(backend, directory)
+
+
+async def stdio_signal(backend, directory):
+    """A termination signal must finish without waiting for client pipe closure."""
+    name = f"artifact-{RUN[:12]}-stdio-signal"
+    environment = {**os.environ, "ENABLE_LIFECYCLE_TOOLS": "true"}
+    environment.pop("PYTHONPATH", None)
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        *cli_args(backend),
+        env=environment,
+        cwd=directory,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+    )
+    assert process.stdin is not None and process.stdout is not None
+    try:
+        message = {
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "tools/call",
+            "params": {
+                "name": "terminal_execute",
+                "arguments": {"args": ["echo", "signal-ready"], "computer_id": name},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        }
+        process.stdin.write((json.dumps(message) + "\n").encode())
+        await process.stdin.drain()
+        async with asyncio.timeout(90):
+            while True:
+                line = await process.stdout.readline()
+                assert line, "CLI ended before signal fixture attached"
+                response = json.loads(line)
+                if response.get("id") == 0:
+                    result = response.get("result", {})
+                    assert not result.get("isError")
+                    assert result["structuredContent"]["stdout"] == "signal-ready\n"
+                    break
+        process.send_signal(
+            signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM
+        )
+        await asyncio.wait_for(process.wait(), 40)
+        assert process.returncode == 0
+        if backend == "docker":
+            assert_absent(name)
+        print(
+            json.dumps(
+                {
+                    "backend": backend,
+                    "stdio_signal_open_pipe": "passed",
+                    "signal": "SIGBREAK" if os.name == "nt" else "SIGTERM",
+                }
+            ),
+            flush=True,
+        )
+    finally:
+        if process.returncode is None:
+            process.kill()
+        await process.wait()
+        process.stdin.close()
+        assert process.stderr is not None
+        diagnostics = await process.stderr.read()
+        assert TOKEN.encode() not in diagnostics
+
 
 async def persistent_docker(directory):
     name = f"artifact-{RUN[:12]}-persistent"

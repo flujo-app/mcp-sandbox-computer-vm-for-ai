@@ -5,7 +5,9 @@ import asyncio
 import os
 import signal
 import sys
-from typing import NoReturn
+from collections.abc import Callable
+from types import FrameType
+from typing import Any, NoReturn, cast
 
 from kilntainers.auth import http_allowlists
 from kilntainers.backends import (
@@ -15,6 +17,7 @@ from kilntainers.backends import (
 from kilntainers.config import BackendConfig, ServerConfig
 from kilntainers.errors import BackendError
 from kilntainers.server import create_http_app, create_server
+from kilntainers.stdio_input import interruptible_stdin
 
 # Sentinel for detecting unset HTTP-only arguments
 _UNSET = object()
@@ -351,15 +354,46 @@ def main() -> None:
     except BackendError as e:
         _startup_error(str(e))
 
-    # asyncio.run cancels the main task on SIGINT and awaits lifespan cleanup.
-    # Never report forced os._exit(0) as successful resource cleanup.
-    def _handle_sigterm(signum: int, frame: object) -> None:
-        os.kill(os.getpid(), signal.SIGINT)
+    with interruptible_stdin(server_config.transport == "stdio") as stop_stdin:
+        # Route termination through asyncio cancellation and awaited lifespan cleanup.
+        # A forced successful exit could hide failed or unfinished cleanup.
+        def _handle_sigterm(signum: int, frame: object) -> None:
+            stop_stdin()
+            signal.raise_signal(signal.SIGINT)
 
-    signal.signal(signal.SIGTERM, _handle_sigterm)
-    if hasattr(signal, "SIGBREAK"):
-        signal.signal(signal.SIGBREAK, _handle_sigterm)
-    try:
-        asyncio.run(_run_server(mcp, server_config))
-    except KeyboardInterrupt:
-        pass
+        async def _run_stdio() -> None:
+            # asyncio.Runner has installed its cancellation handler by this point.
+            # Wake the file reader, then preserve that normal cancellation path.
+            runner_handler = signal.getsignal(signal.SIGINT)
+
+            def _handle_sigint(signum: int, frame: FrameType | None) -> None:
+                stop_stdin()
+                if callable(runner_handler):
+                    cast(Callable[[int, FrameType | None], Any], runner_handler)(
+                        signum, frame
+                    )
+                else:
+                    signal.default_int_handler(signum, frame)
+
+            signal.signal(signal.SIGINT, _handle_sigint)
+            try:
+                await mcp.run_stdio_async()
+            finally:
+                signal.signal(signal.SIGINT, runner_handler)
+
+        handlers = {signal.SIGTERM: _handle_sigterm}
+        if hasattr(signal, "SIGBREAK"):
+            handlers[signal.SIGBREAK] = _handle_sigterm
+        previous = {
+            sig: signal.signal(sig, handler) for sig, handler in handlers.items()
+        }
+        try:
+            if server_config.transport == "stdio":
+                asyncio.run(_run_stdio())
+            else:
+                asyncio.run(_run_server(mcp, server_config))
+        except KeyboardInterrupt:
+            pass  # Lifespan cleanup completed during asyncio runner shutdown.
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
