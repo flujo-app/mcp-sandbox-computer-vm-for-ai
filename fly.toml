@@ -5,7 +5,7 @@ primary_region = "gru"
   dockerfile = "Dockerfile"
 
 [processes]
-  app = "--transport http --host 0.0.0.0 --port 8080 --backend fly"
+  app = "--transport http --host 0.0.0.0 --port 8080 --backend fly --allowed-http-host mcp-sandbox-computer-vm-for-ai.fly.dev --allowed-http-origin https://mcp-sandbox-computer-vm-for-ai.fly.dev"
 
 [env]
   FLY_APP_NAME = "mcp-sandbox-computer-vm-for-ai"
@@ -27,9 +27,10 @@ primary_region = "gru"
   size = "shared-cpu-1x"
   memory = "512mb"
 
-[[http_service.checks]]
+# TCP liveness does not expose the authenticated HTTP health endpoint.
+[checks.controller]
+  type = "tcp"
+  port = 8080
   interval = "15s"
   timeout = "3s"
   grace_period = "20s"
-  method = "GET"
-  path = "/healthz"

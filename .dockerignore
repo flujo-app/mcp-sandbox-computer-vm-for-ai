@@ -1,10 +1,8 @@
 .git
-.github
 .venv
-__pycache__
+node_modules
 .pytest_cache
 .ruff_cache
+__pycache__
 dist
-*.pyc
-*.pyo
-*.egg-info
+work

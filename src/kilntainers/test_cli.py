@@ -3,7 +3,7 @@
 import subprocess
 import sys
 from typing import cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -372,7 +372,8 @@ def test_validate_config_http_mode_no_error():
             "0.0.0.0",
             "--port",
             "9090",
-            "--allow-unauthenticated-http",
+            "--auth-token",
+            "test-" * 8,
         ]
     )
     server_config, _docker_config = build_configs(args)
@@ -401,13 +402,13 @@ def test_validate_config_public_http_accepts_bearer_token():
             "--host",
             "0.0.0.0",
             "--auth-token",
-            "test-secret",
+            "test-" * 8,
         ]
     )
     server_config, _docker_config = build_configs(args)
 
     validate_config(server_config)
-    assert server_config.auth_token == "test-secret"
+    assert server_config.auth_token == "test-" * 8
 
 
 def test_validate_config_both_tool_description_params():
@@ -567,7 +568,7 @@ async def test_async_main_successful_startup():
     mock_backend = MagicMock()
 
     mock_mcp = MagicMock()
-    mock_mcp.run = MagicMock()
+    mock_mcp.run_stdio_async = AsyncMock()
 
     with (
         patch("kilntainers.cli.get_backend_class") as mock_get_backend,
@@ -582,31 +583,22 @@ async def test_async_main_successful_startup():
         mock_create_server.assert_called_once_with(mock_backend, server_config)
 
         # Verify mcp.run was called with correct transport (keyword arg)
-        mock_mcp.run.assert_called_once_with(transport="stdio")
+        mock_mcp.run_stdio_async.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
 async def test_async_main_transport_mapping():
-    """Test that CLI transport maps to correct FastMCP transport string."""
-    server_config = ServerConfig(transport="http")
-    docker_config = DockerBackendConfig()
-
-    mock_backend = MagicMock()
-
-    mock_mcp = MagicMock()
-    mock_mcp.run = MagicMock()
-
+    """HTTP runner receives the explicit configuration, not a sync run inside asyncio."""
+    config = ServerConfig(transport="http", auth_token="test-" * 8)
+    backend = MagicMock()
+    server = MagicMock()
     with (
-        patch("kilntainers.cli.get_backend_class") as mock_get_backend,
-        patch("kilntainers.cli.create_server") as mock_create_server,
+        patch("kilntainers.cli.get_backend_class", return_value=lambda _: backend),
+        patch("kilntainers.cli.create_server", return_value=server),
+        patch("kilntainers.cli._run_server", new_callable=AsyncMock) as run,
     ):
-        mock_get_backend.return_value = lambda _: mock_backend
-        mock_create_server.return_value = mock_mcp
-
-        await _async_main(server_config, docker_config, "docker")
-
-        # Verify transport mapping (keyword arg)
-        mock_mcp.run.assert_called_once_with(transport="streamable-http")
+        await _async_main(config, DockerBackendConfig(), "docker")
+        run.assert_awaited_once_with(server, config)
 
 
 # ================
@@ -619,7 +611,7 @@ def test_main_keyboard_interrupt():
     mock_backend = MagicMock()
 
     mock_mcp = MagicMock()
-    mock_mcp.run = MagicMock(side_effect=KeyboardInterrupt())
+    mock_mcp.run_stdio_async = AsyncMock(side_effect=KeyboardInterrupt())
 
     with (
         patch("kilntainers.cli.build_parser") as mock_parser,

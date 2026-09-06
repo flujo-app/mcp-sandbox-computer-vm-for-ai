@@ -1,20 +1,20 @@
 """CLI argument parsing and main entry point."""
 
 import argparse
+import asyncio
 import os
 import signal
 import sys
-import threading
 from typing import NoReturn
 
-from kilntainers.auth import BearerTokenMiddleware
+from kilntainers.auth import http_allowlists
 from kilntainers.backends import (
     get_available_backend_names,
     get_backend_class,
 )
 from kilntainers.config import BackendConfig, ServerConfig
 from kilntainers.errors import BackendError
-from kilntainers.server import create_server
+from kilntainers.server import create_http_app, create_server
 
 # Sentinel for detecting unset HTTP-only arguments
 _UNSET = object()
@@ -85,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--auth-token",
         default=os.getenv("KILNTAINERS_AUTH_TOKEN"),
         help=(
-            "Static bearer token for the /mcp HTTP route "
+            "Static owner bearer token for all HTTP routes "
             "(default: KILNTAINERS_AUTH_TOKEN)"
         ),
     )
@@ -94,9 +94,21 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help=(
-            "Allow a non-loopback HTTP listener without authentication. "
+            "Explicitly allow local loopback HTTP without authentication. "
             "Only use behind a trusted private network or auth proxy."
         ),
+    )
+    core.add_argument(
+        "--allowed-http-host",
+        action="append",
+        default=[],
+        help="Exact public Host authority (repeatable, reverse proxies)",
+    )
+    core.add_argument(
+        "--allowed-http-origin",
+        action="append",
+        default=[],
+        help="Exact allowed HTTP(S) Origin (repeatable, no wildcard)",
     )
     core.add_argument(
         "--shell",
@@ -169,6 +181,8 @@ def build_configs(
         session_timeout=session_timeout,
         auth_token=args.auth_token,
         allow_unauthenticated_http=args.allow_unauthenticated_http,
+        allowed_http_hosts=tuple(args.allowed_http_host),
+        allowed_http_origins=tuple(args.allowed_http_origin),
     )
 
     # Delegate backend config construction to the backend class
@@ -248,52 +262,63 @@ def validate_config(server_config: ServerConfig) -> None:
     if server_config.output_limit < 1:
         _startup_error("--output-limit must be at least 1 byte.")
 
-    if (
-        server_config.transport == "http"
-        and server_config.host not in {"127.0.0.1", "localhost", "::1"}
-        and not server_config.auth_token
-        and not server_config.allow_unauthenticated_http
-    ):
-        _startup_error(
-            "A non-loopback HTTP listener can execute arbitrary sandbox commands. "
-            "Set KILNTAINERS_AUTH_TOKEN/--auth-token, or explicitly pass "
-            "--allow-unauthenticated-http behind a trusted private network."
+    if not 1 <= server_config.default_timeout <= 3600:
+        _startup_error("--timeout must be between 1 and 3600 seconds")
+    if not 1 <= server_config.output_limit <= 8 * 1024 * 1024:
+        _startup_error("--output-limit must be between 1 byte and 8 MiB")
+    if server_config.transport == "http":
+        if not 1 <= server_config.port <= 65535:
+            _startup_error("--port must be between 1 and 65535")
+        if not 1 <= server_config.session_timeout <= 86400:
+            _startup_error("--session-timeout must be between 1 and 86400 seconds")
+        if server_config.allow_unauthenticated_http and server_config.host not in {
+            "127.0.0.1",
+            "localhost",
+            "::1",
+        }:
+            _startup_error("--allow-unauthenticated-http requires a loopback listener")
+        if not server_config.allow_unauthenticated_http and (
+            not server_config.auth_token or len(server_config.auth_token.encode()) < 32
+        ):
+            _startup_error(
+                "HTTP requires --auth-token (at least 32 bytes) or explicit "
+                "--allow-unauthenticated-http on loopback"
+            )
+        try:
+            http_allowlists(server_config)
+        except ValueError as error:
+            _startup_error(str(error))
+
+
+async def _run_server(mcp, config):
+    if config.transport == "stdio":
+        await mcp.run_stdio_async()
+    else:
+        import uvicorn
+
+        server = uvicorn.Server(
+            uvicorn.Config(
+                create_http_app(mcp, config),
+                host=config.host,
+                port=config.port,
+                log_level="warning",
+                access_log=False,
+                timeout_graceful_shutdown=30,
+                limit_concurrency=80,
+            )
         )
+        await server.serve()
+        if mcp.cleanup_failed:
+            raise BackendError("Sandbox shutdown cleanup is incomplete")
 
 
-async def _async_main(
-    server_config: ServerConfig,
-    backend_config: BackendConfig,
-    backend_name: str,
-) -> None:
-    """Async startup: build server, run.
-
-    This function performs all async startup operations:
-    - Creates the backend (validation happens lazily)
-    - Creates the MCP server
-    - Runs the transport (blocking until shutdown)
-
-    Args:
-        server_config: Server configuration.
-        backend_config: Backend configuration.
-        backend_name: Name of the backend to use.
-
-    Raises:
-        SystemExit: If server creation fails.
-    """
-    # Create backend (validation happens lazily on first terminal_execute)
-    backend_class = get_backend_class(backend_name)
-    backend = backend_class(backend_config)
-
-    # Create the MCP server (assembles tool description, registers tool)
+async def _async_main(server_config, backend_config, backend_name):
+    backend = get_backend_class(backend_name)(backend_config)
     try:
         mcp = create_server(backend, server_config)
-    except BackendError as e:
-        _startup_error(str(e))
-
-    # Run the transport (blocks until shutdown)
-    transport = "stdio" if server_config.transport == "stdio" else "streamable-http"
-    mcp.run(transport=transport)
+    except BackendError as error:
+        _startup_error(str(error))
+    await _run_server(mcp, server_config)
 
 
 def main() -> None:
@@ -326,47 +351,15 @@ def main() -> None:
     except BackendError as e:
         _startup_error(str(e))
 
-    # Run the transport (blocks until shutdown)
-    # mcp.run() manages its own event loop, so we call it directly
-    transport = "stdio" if server_config.transport == "stdio" else "streamable-http"
-
-    # Register SIGTERM handler to convert to SIGINT for clean shutdown
-    # FastMCP handles SIGINT (Ctrl+C) gracefully, so we redirect SIGTERM to the same path
+    # asyncio.run cancels the main task on SIGINT and awaits lifespan cleanup.
+    # Never report forced os._exit(0) as successful resource cleanup.
     def _handle_sigterm(signum: int, frame: object) -> None:
-        """
-        Convert SIGTERM to SIGINT for clean shutdown (triggers mcp library graceful shutdown).
-
-        Watchdog timmer needed as `mcp` library doesn't exit on SIGTERM.
-
-        `mcp` library is adding sigterm support, but not in a release yet.
-        """
-        # Schedule forced exit as fallback in case graceful shutdown hangs.
-        # Uses a daemon thread so it won't block normal exit if shutdown succeeds.
-        timer = threading.Timer(5.0, lambda: os._exit(0))
-        timer.daemon = True
-        timer.start()
         os.kill(os.getpid(), signal.SIGINT)
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
     if hasattr(signal, "SIGBREAK"):
         signal.signal(signal.SIGBREAK, _handle_sigterm)
-
     try:
-        if server_config.transport == "http" and server_config.auth_token:
-            import uvicorn
-
-            app = mcp.streamable_http_app()
-            app.add_middleware(
-                BearerTokenMiddleware,  # ty: ignore[invalid-argument-type]
-                token=server_config.auth_token,
-            )
-            uvicorn.run(
-                app,
-                host=server_config.host,
-                port=server_config.port,
-                log_level="info",
-            )
-        else:
-            mcp.run(transport=transport)
+        asyncio.run(_run_server(mcp, server_config))
     except KeyboardInterrupt:
-        pass  # Clean exit on Ctrl+C
+        pass

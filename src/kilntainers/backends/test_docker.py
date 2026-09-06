@@ -114,7 +114,7 @@ def mock_subprocess(monkeypatch):
     async def create_mock(*args, **kwargs):
         if responses:
             return responses.pop(0)
-        return MockProcess(0, b"", b"")
+        return MockProcess(1 if "inspect" in args else 0, b"", b"")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", create_mock)
 
@@ -253,6 +253,8 @@ class TestDockerBackendSandboxCreation:
         stop_called = [False]
 
         async def create_mock(*args, **kwargs):
+            if "inspect" in args and "image" not in args:
+                return MockProcess(1, stderr=b"No such object: fixture")
             call_count[0] += 1
 
             if call_count[0] == 1:  # image inspect
@@ -261,7 +263,7 @@ class TestDockerBackendSandboxCreation:
                 return MockProcess(0, stdout=b"a" * 64)
             elif call_count[0] == 3:  # readiness check - wrong output
                 return MockProcess(0, stdout=b"wrong output\n")
-            elif "stop" in args:
+            elif "rm" in args:
                 stop_called[0] = True
                 return MockProcess(0)
             return MockProcess(0)
@@ -600,6 +602,8 @@ class TestDockerSandboxExec:
         """Command times out."""
 
         async def create_mock(*args, **kwargs):
+            if "inspect" in args and "image" not in args:
+                return MockProcess(1, stderr=b"No such object: fixture")
             # Create a process with blocking stream readers
             proc = MockProcess(0, block_stdout=True, block_stderr=True)
             return proc
@@ -618,6 +622,8 @@ class TestDockerSandboxExec:
         """Output limit exceeded."""
 
         async def create_mock(*args, **kwargs):
+            if "inspect" in args and "image" not in args:
+                return MockProcess(1, stderr=b"No such object: fixture")
             # Create a process that generates lots of output
             proc = MockProcess(0, stdout=b"x" * 10000, stderr=b"y" * 10000)
             return proc
@@ -698,8 +704,10 @@ class TestDockerSandboxStop:
         stop_called = [False]
 
         async def create_mock(*args, **kwargs):
+            if "inspect" in args and "image" not in args:
+                return MockProcess(1, stderr=b"No such object: fixture")
             cmd = args[1] if len(args) > 1 else ""
-            if "stop" in cmd:
+            if "rm" in cmd:
                 stop_called[0] = True
                 return MockProcess(0)
             return MockProcess(0)
@@ -718,8 +726,10 @@ class TestDockerSandboxStop:
         stop_count = [0]
 
         async def create_mock(*args, **kwargs):
+            if "inspect" in args and "image" not in args:
+                return MockProcess(1, stderr=b"No such object: fixture")
             cmd = args[1] if len(args) > 1 else ""
-            if "stop" in cmd:
+            if "rm" in cmd:
                 stop_count[0] += 1
                 return MockProcess(0)
             return MockProcess(0)

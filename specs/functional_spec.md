@@ -1,3 +1,15 @@
+> **0.3 / MCP 2026 amendment (supersedes transport-session assumptions below):**
+> Application-owned unguessable sandbox handles address HTTP state. A call without a
+> handle creates an independent context; both protocol eras must pass it to reuse state.
+> Transport IDs never select or expire sandboxes. Stdio keeps a lazy process default.
+> Idle expiry is independently enforced per handle; active and queued work is not idle.
+> Release, idle expiry, and shutdown remove temporary sandboxes with confirmed cleanup.
+> Permanent computers require Docker/Fly; unsupported restart must never erase state.
+> All HTTP routes require the single-owner bearer and exact Host/Origin checks, except
+> explicit loopback-only development mode. This is not a multi-tenant service.
+> Public SDK 2.1.1 MCPServer/Apps APIs serve 2026-07-28 and legacy 2025-11-25.
+> README's 0.3 migration defines request bounds and cancellation effects.
+
 # Kilntainers — Functional Specification
 
 ## 1. Overview

@@ -1,3 +1,5 @@
+> Historical architecture notes. The current public SDK 2 / explicit-handle lifecycle is specified in the 0.3 amendment in ../functional_spec.md and implemented in server.py and leases.py.
+
 # Architecture: Connection & Session Lifecycle
 
 **Phase 6** of the architecture specification. Defines how stdio and Streamable HTTP transports map to sandbox lifecycles, session tracking for HTTP (creation, idle timeout, teardown), sandbox ownership, graceful shutdown orchestration, and sandbox death propagation to the MCP layer.

@@ -716,3 +716,26 @@ class TestE2BSandboxSandboxId:
         sandbox = E2BSandbox(e2b_sandbox=mock_sb, shell="/bin/bash")  # type: ignore[arg-type]
 
         assert sandbox.sandbox_id == "custom-sandbox-456"
+
+
+async def test_streaming_output_limit_stops_before_unbounded_provider_accumulation(
+    monkeypatch,
+):
+    remote = MockAsyncSandbox()
+    chunks = 0
+
+    async def stream(cmd, **kwargs):
+        nonlocal chunks
+        for _ in range(1000000):
+            chunks += 1
+            kwargs["on_stdout"]("x" * 1024)
+        return MockCommandResult()
+
+    monkeypatch.setattr(remote.commands, "run", stream)
+    sandbox = E2BSandbox(e2b_sandbox=remote, shell="/bin/bash")
+    result = await sandbox.exec(
+        ExecRequest(command="yes", timeout=10, output_limit=1500)
+    )
+    assert chunks == 2
+    assert result.exit_code == 1 and "output limit" in result.stderr
+    assert remote._killed

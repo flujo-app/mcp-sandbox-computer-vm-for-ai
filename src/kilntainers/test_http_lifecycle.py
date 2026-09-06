@@ -171,6 +171,7 @@ class TestHTTPSessionIsolation:
             "127.0.0.1",
             "--port",
             str(server_port),
+            "--allow-unauthenticated-http",
             f"--docker-run-flag=--label={test_container_label}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -232,7 +233,6 @@ class TestHTTPSessionIsolation:
             async with streamable_http_client(server_url) as (
                 read_stream,
                 write_stream,
-                _,
             ):
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize
@@ -246,13 +246,14 @@ class TestHTTPSessionIsolation:
                         "terminal_execute", {"command": "touch a.txt"}
                     )
                     results_client1.append({"cmd": "touch a.txt", "result": result})
+                    handle = result.structured_content["sandbox_handle"]
                     client1_done_touch.set()
 
                     await client2_done_touch.wait()  # Wait for client 2 to touch b.txt
 
                     # Client 1: ls (should see a.txt)
                     result = await session.call_tool(
-                        "terminal_execute", {"command": "ls"}
+                        "terminal_execute", {"command": "ls", "sandbox_handle": handle}
                     )
                     results_client1.append({"cmd": "ls", "result": result})
 
@@ -261,7 +262,6 @@ class TestHTTPSessionIsolation:
             async with streamable_http_client(server_url) as (
                 read_stream,
                 write_stream,
-                _,
             ):
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize
@@ -275,13 +275,14 @@ class TestHTTPSessionIsolation:
                         "terminal_execute", {"command": "touch b.txt"}
                     )
                     results_client2.append({"cmd": "touch b.txt", "result": result})
+                    handle = result.structured_content["sandbox_handle"]
                     client2_done_touch.set()
 
                     await client1_done_touch.wait()  # Wait for client 1 to touch a.txt
 
                     # Client 2: ls (should see b.txt, NOT a.txt)
                     result = await session.call_tool(
-                        "terminal_execute", {"command": "ls"}
+                        "terminal_execute", {"command": "ls", "sandbox_handle": handle}
                     )
                     results_client2.append({"cmd": "ls", "result": result})
 

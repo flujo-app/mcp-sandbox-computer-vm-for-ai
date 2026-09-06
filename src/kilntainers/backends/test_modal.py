@@ -95,11 +95,13 @@ class MockSandbox:
         self.object_id = object_id
         self.exec_responses = []
         self.terminated = False
+        self.detached = False
         self._wait_event = asyncio.Event()
 
         # Create nested classes with reference to parent
         self._exec = self._MockExec(self)
         self._terminate = self._MockTerminate(self)
+        self.detach = self._MockDetach(self)
         self._wait = self._MockWait(self)
 
     def set_exec_response(self, response: MockContainerProcess):
@@ -130,8 +132,16 @@ class MockSandbox:
         def __init__(self, parent):
             self.parent = parent
 
-        async def aio(self):
+        async def aio(self, *, wait=False):
+            assert wait is True
             self.parent.terminated = True
+
+    class _MockDetach:
+        def __init__(self, parent):
+            self.parent = parent
+
+        async def aio(self):
+            self.parent.detached = True
 
     class _MockWait:
         def __init__(self, parent):
@@ -741,6 +751,7 @@ class TestModalSandboxStop:
         assert sandbox._stopped
         assert sandbox._stop_requested
         assert mock_sb.terminated
+        assert mock_sb.detached
 
     @pytest.mark.asyncio
     async def test_stop_idempotent(self, sandbox):
@@ -753,6 +764,7 @@ class TestModalSandboxStop:
 
         # terminate should only be called once (tracked by terminated flag)
         assert mock_sb.terminated
+        assert mock_sb.detached
 
 
 class TestModalSandboxDeathDetection:

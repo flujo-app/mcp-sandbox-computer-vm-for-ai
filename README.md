@@ -14,16 +14,76 @@ MCP Sandbox Computer VM for AI is a lifecycle-focused fork of [Kilntainers](http
 
 - 🖥️ **MCP App dashboard:** List computers, run commands, restart, factory reset, and delete from FLUJO or another stable MCP Apps host.
 - 🏷️ **Named computers:** Reconnect with a stable `computer_id`, or omit it to receive a readable random slug.
-- 💾 **Explicit lifecycle:** Temporary computers are removed with their MCP session; permanent computers survive and can be reattached later.
+- 💾 **Explicit lifecycle:** Temporary computers expire independently by handle or are explicitly released; permanent Docker/Fly computers survive.
 - 🧰 **Multiple backends:** Docker/Podman, native Fly Machines, [Modal](https://modal.com), [E2B](https://e2b.dev), and WebAssembly.
-- 🏝️ **Isolated per agent:** Every agent gets its own dedicated sandbox — no shared state, no cross-contamination.
+- 🏝️ **Explicit isolation:** HTTP callers retain a separate random sandbox handle. Sharing a handle or deliberately attaching a permanent name shares that computer.
 - 🔒 **Secure by design:** The agent communicates *with* the sandbox over MCP — it doesn’t run *inside* it. No agent API keys, code, or prompts are exposed to the sandbox.
 - 🔌 **Tool and UI access:** `terminal_execute` stays simple, while optional provider-neutral lifecycle tools power both models and the dashboard.
-- 📈 **Scalable:** Scale from a few agents on your laptop to thousands running in parallel in the cloud.
+- 📈 **Bounded execution:** Up to 32 live handles, 64 queued requests across the server, and 8 queued requests per handle.
 
 ## Why sandbox computers?
 
 Agents are already excellent at using terminals and can save thousands of tokens with common Linux utilities like `grep`, `find`, `jq`, and `awk`. Giving an agent access to the host OS is dangerous, while provisioning large numbers of isolated environments is operationally painful. MCP Sandbox Computer VM for AI gives every agent a dedicated sandbox with an explicit lifecycle.
+
+## MCP 2026 and 0.3 migration
+
+This version uses public Python MCP SDK 2.1.1 and MCP Apps APIs. It serves modern
+**2026-07-28** and deliberate legacy **2025-11-25** clients over stdio and
+Streamable HTTP at `/mcp`. SDK v2 and the dated MCP protocol are separate
+version numbers. The old standalone SSE endpoint is not provided.
+
+HTTP clients must save the returned `sandbox_handle` and send it with later calls:
+
+```json
+{"name":"terminal_execute","arguments":{"command":"echo hello > /tmp/example"}}
+```
+
+The response returns a handle. Reuse it:
+
+```json
+{"name":"terminal_execute","arguments":{"command":"cat /tmp/example","sandbox_handle":"<returned handle>"}}
+```
+
+Omitting the handle on HTTP creates a new computer, including for legacy clients.
+Closing a TCP connection or legacy MCP session does not erase explicit application
+state. Idle handles expire after `--session-timeout` seconds (default 300);
+active and queued operations are not idle. `computer_release` releases
+one handle now. Handles are valid only in this process; inventory never reveals them.
+
+HTTP requires a random owner bearer token of at least 32 bytes, including on
+loopback. Prefer the environment over command-line arguments:
+
+```bash
+export KILNTAINERS_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+kilntainers --transport http
+```
+
+Every route checks the bearer token, exact Host, and any supplied Origin; no
+permissive CORS is enabled. Use `--allowed-http-host example.com` and
+`--allowed-http-origin https://example.com` behind an authenticated HTTPS
+reverse proxy. Forward the bearer header. The explicit
+`--allow-unauthenticated-http` development option is restricted to loopback.
+Compose now requires the token. The bearer represents **one trusted administrative
+owner**, not independent users. Use separate server/provider accounts for untrusted tenants.
+
+Command/argv input is limited to 64 KiB and 256 arguments, stdin to 2 MiB, HTTP
+bodies to 4 MiB, command deadlines to 1–3600 seconds, and output to the configured
+combined byte limit (default 2 MiB, maximum 8 MiB). Cancellation, timeout, or output
+overflow can stop the affected sandbox to end provider-side work. Permanent
+Docker/Fly writable state remains available for an explicit restart. Cleanup
+failures are reported and retained for retry instead of being treated as successful
+removal. Provider/network failures can still require cleanup in the provider console.
+
+Permanent named reattachment and restart preserving files require Docker/Fly.
+Modal, E2B, and WASM are temporary backends; an unsupported restart returns an error
+instead of silently erasing files. Cloud APIs are tested with mocks and current
+pinned SDKs, without paid provisioning in CI. Fly CLI 0.4.99 archives are pinned
+and checked against published SHA-256 hashes before installation.
+
+See [the protocol release](https://blog.modelcontextprotocol.io/posts/2026-07-28/),
+[Modal lifecycle](https://modal.com/docs/guide/sandboxes),
+[E2B SDK](https://e2b.dev/docs/sdk-reference/python-sdk),
+and [Fly Machines API](https://fly.io/docs/machines/api/machines-resource/).
 
 ## Quick Start
 
@@ -52,7 +112,7 @@ Or add it to a JSON-based MCP client such as Claude Desktop:
 }
 ```
 
-By default, the server exposes only `terminal_execute`. Set `ENABLE_LIFECYCLE_TOOLS=true` before starting the server to expose the `computer_*` tools and MCP App dashboard. For a JSON-based stdio client, add it to the server configuration:
+By default, the server exposes `terminal_execute` and `computer_release`. Set `ENABLE_LIFECYCLE_TOOLS=true` before starting the server to expose the `computer_*` tools and MCP App dashboard. For a JSON-based stdio client, add it to the server configuration:
 
 ```json
 {
@@ -66,12 +126,14 @@ Then call `computer_dashboard` to open the App. The dashboard has no external br
 
 ## Named computer lifecycle
 
-`terminal_execute` accepts two additional optional inputs:
+`terminal_execute` accepts these lifecycle inputs:
 
-- `computer_id`: a 1–63 character lowercase slug. The first call without one creates a readable random ID and reuses it as that MCP session's default.
-- `temporary`: defaults to `true`. Temporary computers are removed when the owning MCP session closes. Set it to `false` for a computer that survives server/session shutdown and can be reattached later by ID.
+- `computer_id`: a 1–63 character lowercase slug. Stdio keeps a lazy process default; each HTTP call without sandbox_handle creates an independent context.
+- `temporary`: defaults to `true`. Temporary computers are removed on handle release, idle expiry, or server shutdown. Set it to false on Docker/Fly to retain provider-side state and deliberately reattach by ID.
 
-Every execution result includes `computer_id` and `temporary` next to stdout, stderr, exit code, and duration:
+- `sandbox_handle`: an opaque capability returned by the first call. Pass it to every later HTTP command, restart, reset, delete, or release. Readable names and transport IDs are not capabilities.
+
+Every execution result includes `sandbox_handle`, `computer_id` and `temporary` next to stdout, stderr, exit code, and duration:
 
 ```json
 {
@@ -107,13 +169,13 @@ Lifecycle tools are provider-neutral and are disabled unless `ENABLE_LIFECYCLE_T
 ```
 
 1. An MCP client starts MCP Sandbox Computer VM for AI over stdio or connects over HTTP
-2. On the first `terminal_execute` call, the server creates a named isolated computer. Each connection gets its own random default unless it explicitly attaches by ID.
+2. On the first `terminal_execute` call, the server creates a named isolated computer. HTTP creates independent handles; stdio retains its process default.
 3. Commands run inside the sandbox; stdout, stderr, and exit code are returned
-4. When the session ends, temporary computers are destroyed; permanent computers remain provider-side.
+4. Release a handle with computer_release; temporary computers also expire independently after idle timeout or process shutdown. Permanent computers remain provider-side.
 
 **Security:** The agent communicates *with* the sandbox over MCP — it doesn't run *inside* it. This is intentional: agents often need secrets (API keys, system prompts, code), and those should never be exposed inside a sandbox where a prompt injection could exfiltrate them.
 
-**Agent Isolation & Sandbox Lifecycle:** An omitted ID gives each MCP connection an isolated default computer. Explicit IDs make reconnection intentional. Docker labels and Fly Machine metadata make permanent computers discoverable after the MCP server itself restarts.
+**Agent Isolation & Sandbox Lifecycle:** HTTP state is addressed by sandbox_handle independently of transport connections. All callers holding the configured bearer share one administrative owner; permanent name attachment intentionally shares state. Docker labels and Fly Machine metadata make permanent computers discoverable after the MCP server itself restarts.
 
 ## Backend Examples
 
@@ -245,7 +307,7 @@ uv tool install mcp-sandbox-computer-vm-for-ai[wasm]  # include WASM backends (+
 pip install mcp-sandbox-computer-vm-for-ai            # also works with pip
 ```
 
-Requires Python 3.13+. Docker backend requires Docker or Podman. The Modal and E2B backends require accounts to those services.
+Requires Python 3.13 or 3.14. Docker backend requires Docker or Podman. The Modal and E2B backends require accounts to those services.
 
 ## Releasing
 
@@ -294,7 +356,7 @@ core options:
   --session-timeout SESSION_TIMEOUT
                         Idle session timeout in seconds (default: 300, HTTP mode only)
   --auth-token AUTH_TOKEN
-                        Bearer token for /mcp (default: KILNTAINERS_AUTH_TOKEN)
+                        Owner bearer token for every HTTP route (default: KILNTAINERS_AUTH_TOKEN)
   --allow-unauthenticated-http
                         Explicitly allow a non-loopback listener without built-in auth
   --shell SHELL         Shell binary for command mode (e.g., /bin/bash, ash). Default: /bin/bash.

@@ -1,33 +1,55 @@
 name: Build and Test
-
 on:
   push:
-
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
 jobs:
-  build:
-    name: Build, Typecheck, and Test Python
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
+  test:
+    name: Python ${{ matrix.python }} on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, python: "3.13" }
+          - { os: ubuntu-latest, python: "3.14" }
+          - { os: windows-latest, python: "3.13" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
-          enable-cache: true
-
-      - name: Set up Python 3.13
-        run: uv python install 3.13
-
-      - name: Install the project
-        run: uv sync --all-extras --dev
-
-      - name: Test All Python
-        run: uv run python3 -m pytest -vv -n auto .
-
-      - name: Check Python Types
-        run: uv run ty check
-
-      - name: Build
-        run: uv build
+          version: "0.12.10"
+          python-version: ${{ matrix.python }}
+      - run: uv sync --frozen --all-extras --dev
+      - run: uv run --frozen pytest -q -m "not integration and not e2e and not http_integration"
+      - run: uv build
+      - name: Installed wheel and actual WASM subprocess acceptance
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv run --no-project --with "$wheel[wasm]" python scripts/smoke-package.py
+  docker:
+    name: Real Docker and container artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.10"
+          python-version: "3.13"
+      - run: uv sync --frozen --all-extras --dev
+      - run: docker pull debian:bookworm-slim
+      - name: Existing Docker and lifecycle regressions
+        run: uv run --frozen pytest -q src/kilntainers/backends/test_docker_integration.py src/kilntainers/test_lifecycle_integration.py src/kilntainers/test_e2e_mcp.py src/kilntainers/test_http_lifecycle.py
+      - run: uv build
+      - name: Real installed CLI both-era MCP, isolation, idle removal, EOF and SIGTERM
+        run: |
+          wheel=$(ls dist/*.whl)
+          uv run --no-project --with "$wheel[wasm]" python scripts/smoke-package.py --docker
+      - run: docker build -t sandbox-mcp-acceptance .
+      - name: Run the actual container image artifact
+        run: docker run --rm -v "$PWD/scripts/smoke-package.py:/tmp/smoke-package.py:ro" --entrypoint python sandbox-mcp-acceptance /tmp/smoke-package.py

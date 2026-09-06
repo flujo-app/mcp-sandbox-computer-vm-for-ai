@@ -80,6 +80,8 @@ class ComputerRegistry:
         self.backend = backend
         self._records: dict[str, _ComputerRecord] = {}
         self._lock = asyncio.Lock()
+        self._creating_ids: set[str] = set()
+        self.abandoned: dict[str, asyncio.Task[Sandbox]] = {}
 
     @staticmethod
     def _tag(sandbox: Sandbox, computer_id: str, temporary: bool) -> Sandbox:
@@ -102,6 +104,13 @@ class ComputerRegistry:
             else validate_computer_id(computer_id)
         )
 
+        if (
+            not temporary
+            and type(self.backend).attach_sandbox is Backend.attach_sandbox
+        ):
+            raise BackendError(
+                "Permanent computers require a backend with named reattachment (Docker or Fly)"
+            )
         async with self._lock:
             record = self._records.get(requested_id)
             if record is not None:
@@ -115,6 +124,8 @@ class ComputerRegistry:
                     record.owners += 1
                 return requested_id, record.sandbox
 
+            if requested_id in self._creating_ids:
+                raise BackendError("Computer creation or rollback is still in progress")
             sandbox = await self.backend.attach_sandbox(requested_id)
             if sandbox is not None:
                 actual_temporary = sandbox.temporary
@@ -125,10 +136,30 @@ class ComputerRegistry:
                         f"temporary={str(temporary).lower()}."
                     )
             else:
-                sandbox = await self.backend.create_sandbox(
-                    computer_id=requested_id,
-                    temporary=temporary,
+                if requested_id in self._creating_ids:
+                    raise BackendError(
+                        "Computer creation or rollback is still in progress"
+                    )
+                self._creating_ids.add(requested_id)
+                creation = asyncio.create_task(
+                    asyncio.wait_for(
+                        self.backend.create_sandbox(
+                            computer_id=requested_id, temporary=temporary
+                        ),
+                        timeout=150,
+                    )
                 )
+                try:
+                    sandbox = await asyncio.shield(creation)
+                except asyncio.CancelledError:
+                    # Provisioning can outlive a cancelled MCP request. Retain ownership
+                    # until the returned resource can be removed, including a newly
+                    # requested permanent resource which the caller never received.
+                    self.abandoned[requested_id] = creation
+                    raise
+                finally:
+                    if requested_id not in self.abandoned:
+                        self._creating_ids.discard(requested_id)
                 # Legacy backends keep their original Sandbox interface. These
                 # attributes let the base properties expose registry semantics
                 # without wrapping the instance or breaking backend-specific APIs.
@@ -142,6 +173,31 @@ class ComputerRegistry:
             )
             return requested_id, sandbox
 
+    async def cleanup_pending(self, *, wait: bool = False) -> bool:
+        """Rollback completed abandoned creations; bounded shutdown reports failures."""
+
+        async def cleanup(computer_id, task):
+            if not task.done() and not wait:
+                return True
+            try:
+                sandbox = await asyncio.wait_for(asyncio.shield(task), timeout=25)
+                async with asyncio.timeout(20):
+                    if not await self.backend.delete_computer(computer_id):
+                        await sandbox.stop()
+            except Exception:
+                return False
+            self.abandoned.pop(computer_id, None)
+            self._creating_ids.discard(computer_id)
+            return True
+
+        results = await asyncio.gather(
+            *(
+                cleanup(computer_id, task)
+                for computer_id, task in list(self.abandoned.items())
+            )
+        )
+        return all(results)
+
     async def get_owned(self, computer_id: str) -> Sandbox | None:
         """Return a locally attached sandbox without changing owner refs."""
         async with self._lock:
@@ -154,19 +210,15 @@ class ComputerRegistry:
         return record.sandbox if record is not None else None
 
     async def release(self, computer_id: str) -> None:
-        """Release one owner and remove an unowned temporary computer."""
-        sandbox: Sandbox | None = None
+        """Release one owner; retain a failed cleanup record for retry."""
         async with self._lock:
             record = self._records.get(computer_id)
             if record is None:
                 return
             record.owners = max(0, record.owners - 1)
             if record.temporary and record.owners == 0:
-                sandbox = record.sandbox
+                await record.sandbox.stop()
                 del self._records[computer_id]
-
-        if sandbox is not None:
-            await sandbox.stop()
 
     async def list(self) -> list[ComputerInfo]:
         """Return a de-duplicated provider and in-process inventory."""
@@ -194,14 +246,9 @@ class ComputerRegistry:
             record = self._records.get(computer_id)
             replacement = await self.backend.restart_computer(computer_id)
             if replacement is None:
-                if record is None:
-                    raise BackendError(f"Computer '{computer_id}' was not found.")
-                await record.sandbox.stop()
-                replacement = await self.backend.create_sandbox(
-                    computer_id=computer_id,
-                    temporary=record.temporary,
+                raise BackendError(
+                    "This backend cannot restart while preserving files; use factory reset explicitly"
                 )
-                self._tag(replacement, computer_id, record.temporary)
             if record is None:
                 record = _ComputerRecord(
                     replacement,
@@ -242,10 +289,12 @@ class ComputerRegistry:
         """Permanently delete a managed computer."""
         computer_id = validate_computer_id(computer_id)
         async with self._lock:
-            record = self._records.pop(computer_id, None)
+            record = self._records.get(computer_id)
             deleted = await self.backend.delete_computer(computer_id)
             if deleted:
+                self._records.pop(computer_id, None)
                 return
             if record is None:
                 raise BackendError(f"Computer '{computer_id}' was not found.")
             await record.sandbox.stop()
+            self._records.pop(computer_id, None)

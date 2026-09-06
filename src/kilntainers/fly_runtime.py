@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import shutil
@@ -9,6 +10,7 @@ import stat
 import tarfile
 import tempfile
 import threading
+import time
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -16,7 +18,33 @@ from pathlib import Path, PurePosixPath
 from kilntainers.errors import BackendError
 
 _INSTALL_LOCK = threading.Lock()
-_RELEASE_ENDPOINT = "https://api.fly.io/app/flyctl_releases/{system}/{arch}/latest"
+FLYCTL_VERSION = "0.4.99"
+_RELEASE_DIGESTS = {
+    (
+        "Linux",
+        "x86_64",
+    ): "384a14958b214b18ebda784dee101a633ceae626ac4bcccee0fc7ebb111247a4",
+    (
+        "Linux",
+        "arm64",
+    ): "23fcf016fb7812b743674ee06167abbd68ffb74e00f61c45b7e213f0bd4694ab",
+    (
+        "Darwin",
+        "x86_64",
+    ): "07862adde01f221bc29a30dd79dfa1be49402211da3bf486a718d5791c68d6ad",
+    (
+        "Darwin",
+        "arm64",
+    ): "0d274b7a2b433436c2f7d3c028144f15e87b7c1a3a4e3ee556274afb87785f43",
+    (
+        "windows",
+        "x86_64",
+    ): "9c7205bc3d721bf4043661405780c6c35083e4e246805f528fa95642112397a3",
+    (
+        "windows",
+        "arm64",
+    ): "e8978047519bb5ea191f99cd10a6b96cc1bf8070949858f78f0db3f6116698fb",
+}
 _USER_AGENT = "mcp-sandbox-computer-vm-for-ai flyctl bootstrap"
 
 
@@ -29,9 +57,7 @@ def _env_flag(name: str, *, default: bool) -> bool:
         return True
     if normalized in {"0", "false", "no", "off"}:
         return False
-    raise BackendError(
-        f"{name} must be true or false; got {value!r}."
-    )
+    raise BackendError(f"{name} must be true or false; got {value!r}.")
 
 
 def _install_root() -> Path:
@@ -83,7 +109,13 @@ def _open_url(url: str):
 
 def _download(url: str, destination: Path) -> None:
     with _open_url(url) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output, length=1024 * 1024)
+        size = 0
+        deadline = time.monotonic() + 120
+        while chunk := response.read(1024 * 1024):
+            size += len(chunk)
+            if size > 150 * 1024 * 1024 or time.monotonic() > deadline:
+                raise BackendError("flyctl download exceeded its size or time limit")
+            output.write(chunk)
 
 
 def _safe_name(raw_name: str) -> str:
@@ -102,7 +134,10 @@ def _extract_release(archive: Path, destination: Path, *, zipped: bool) -> None:
                 name = _safe_name(member.filename)
                 if name not in wanted or member.is_dir():
                     continue
-                with bundle.open(member) as source, (destination / name).open("wb") as output:
+                with (
+                    bundle.open(member) as source,
+                    (destination / name).open("wb") as output,
+                ):
                     shutil.copyfileobj(source, output)
                 extracted.add(name)
     else:
@@ -123,31 +158,45 @@ def _extract_release(archive: Path, destination: Path, *, zipped: bool) -> None:
 
 
 def install_flyctl() -> Path:
-    """Download the current official flyctl release into ``~/.fly/bin``."""
+    """Download the pinned, checksum-verified official flyctl release into ``~/.fly/bin``."""
     system_name, architecture, zipped = _platform_release()
-    endpoint = _RELEASE_ENDPOINT.format(system=system_name, arch=architecture)
-    try:
-        with _open_url(endpoint) as response:
-            release_url = response.read(8192).decode("utf-8").strip()
-    except Exception as error:
-        raise BackendError(f"Could not resolve the current flyctl release: {error}") from error
-    if not release_url.startswith("https://"):
-        raise BackendError("Fly.io returned an invalid flyctl download URL.")
+    release_system = {"Darwin": "macOS", "windows": "Windows"}.get(
+        system_name, system_name
+    )
+    suffix = "zip" if zipped else "tar.gz"
+    release_url = (
+        f"https://github.com/superfly/flyctl/releases/download/v{FLYCTL_VERSION}/"
+        f"flyctl_{FLYCTL_VERSION}_{release_system}_{architecture}.{suffix}"
+    )
+    expected_digest = _RELEASE_DIGESTS[(system_name, architecture)]
 
     bin_directory = _install_root() / "bin"
     bin_directory.mkdir(parents=True, exist_ok=True)
     try:
-        with tempfile.TemporaryDirectory(prefix="flyctl-", dir=bin_directory) as raw_temp:
+        with tempfile.TemporaryDirectory(
+            prefix="flyctl-", dir=bin_directory
+        ) as raw_temp:
             temp = Path(raw_temp)
             archive = temp / ("flyctl.zip" if zipped else "flyctl.tar.gz")
             _download(release_url, archive)
+            with archive.open("rb") as source:
+                digest = hashlib.file_digest(source, "sha256").hexdigest()
+            if digest != expected_digest:
+                raise BackendError("flyctl archive checksum mismatch")
             _extract_release(archive, temp, zipped=zipped)
-            for name in ({"flyctl.exe", "fly.exe", "wintun.dll"} if zipped else {"flyctl"}):
+            for name in (
+                {"flyctl.exe", "fly.exe", "wintun.dll"} if zipped else {"flyctl"}
+            ):
                 source = temp / name
                 if not source.exists():
                     continue
                 if name.startswith("fly") and os.name != "nt":
-                    source.chmod(source.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+                    source.chmod(
+                        source.stat().st_mode
+                        | stat.S_IXUSR
+                        | stat.S_IXGRP
+                        | stat.S_IXOTH
+                    )
                 os.replace(source, bin_directory / name)
     except BackendError:
         raise
@@ -156,7 +205,9 @@ def install_flyctl() -> Path:
 
     executable = _installed_flyctl()
     if not executable.is_file():
-        raise BackendError(f"flyctl installation completed but {executable} was not found.")
+        raise BackendError(
+            f"flyctl installation completed but {executable} was not found."
+        )
     if os.name != "nt":
         alias = executable.with_name("fly")
         try:
