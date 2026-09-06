@@ -47,14 +47,14 @@ class TestHTTPLifespan:
         backend = MockBackend(BackendConfig())
         sigterm_calls: list[tuple[int, int]] = []
 
-        # Mock os.kill to capture calls
-        original_kill = os.kill
+        # Capture the portable process-local termination request
+        original_kill = signal.raise_signal
 
-        def mock_kill(pid: int, sig: int) -> None:  # type: ignore[assignment]
+        def mock_kill(sig: int) -> None:  # type: ignore[assignment]
             if sig == signal.SIGTERM:
-                sigterm_calls.append((pid, sig))
+                sigterm_calls.append((os.getpid(), sig))
 
-        os.kill = mock_kill  # type: ignore[assignment]
+        signal.raise_signal = mock_kill  # type: ignore[assignment]
 
         try:
             lifespan_fn = create_lifespan(backend, "http")
@@ -73,7 +73,7 @@ class TestHTTPLifespan:
                 await asyncio.sleep(0.2)
 
         finally:
-            os.kill = original_kill  # type: ignore[assignment]
+            signal.raise_signal = original_kill  # type: ignore[assignment]
 
         # In HTTP mode, SIGTERM should NOT be sent
         assert len(sigterm_calls) == 0, (
@@ -171,6 +171,7 @@ class TestHTTPSessionIsolation:
             "127.0.0.1",
             "--port",
             str(server_port),
+            "--allow-unauthenticated-http",
             f"--docker-run-flag=--label={test_container_label}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -232,7 +233,6 @@ class TestHTTPSessionIsolation:
             async with streamable_http_client(server_url) as (
                 read_stream,
                 write_stream,
-                _,
             ):
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize
@@ -246,13 +246,14 @@ class TestHTTPSessionIsolation:
                         "terminal_execute", {"command": "touch a.txt"}
                     )
                     results_client1.append({"cmd": "touch a.txt", "result": result})
+                    handle = result.structured_content["sandbox_handle"]
                     client1_done_touch.set()
 
                     await client2_done_touch.wait()  # Wait for client 2 to touch b.txt
 
                     # Client 1: ls (should see a.txt)
                     result = await session.call_tool(
-                        "terminal_execute", {"command": "ls"}
+                        "terminal_execute", {"command": "ls", "sandbox_handle": handle}
                     )
                     results_client1.append({"cmd": "ls", "result": result})
 
@@ -261,7 +262,6 @@ class TestHTTPSessionIsolation:
             async with streamable_http_client(server_url) as (
                 read_stream,
                 write_stream,
-                _,
             ):
                 async with ClientSession(read_stream, write_stream) as session:
                     # Initialize
@@ -275,13 +275,14 @@ class TestHTTPSessionIsolation:
                         "terminal_execute", {"command": "touch b.txt"}
                     )
                     results_client2.append({"cmd": "touch b.txt", "result": result})
+                    handle = result.structured_content["sandbox_handle"]
                     client2_done_touch.set()
 
                     await client1_done_touch.wait()  # Wait for client 1 to touch a.txt
 
                     # Client 2: ls (should see b.txt, NOT a.txt)
                     result = await session.call_tool(
-                        "terminal_execute", {"command": "ls"}
+                        "terminal_execute", {"command": "ls", "sandbox_handle": handle}
                     )
                     results_client2.append({"cmd": "ls", "result": result})
 

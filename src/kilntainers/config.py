@@ -52,5 +52,9 @@ class ServerConfig:
     session_timeout: int = 300  # seconds (5 minutes)
 
     # Remote HTTP protection
-    auth_token: str | None = None
+    auth_token: str | None = field(default=None, repr=False)
     allow_unauthenticated_http: bool = False
+    allowed_http_hosts: tuple[str, ...] = ()
+    allowed_http_origins: tuple[str, ...] = ()
+    max_sandboxes: int = 32
+    max_pending_requests: int = 64

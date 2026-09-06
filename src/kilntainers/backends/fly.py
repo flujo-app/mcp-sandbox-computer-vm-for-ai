@@ -201,7 +201,9 @@ class FlyBackend(Backend):
                     break
         if not isinstance(payload, list):
             return []
-        return [cast("dict[str, object]", row) for row in payload if isinstance(row, dict)]
+        return [
+            cast("dict[str, object]", row) for row in payload if isinstance(row, dict)
+        ]
 
     @staticmethod
     def _named_value(row: dict[str, object], *names: str) -> str | None:
@@ -232,7 +234,9 @@ class FlyBackend(Backend):
         destination = self._state_file()
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"app": app}, indent=2) + "\n", encoding="utf-8")
+        temporary.write_text(
+            json.dumps({"app": app}, indent=2) + "\n", encoding="utf-8"
+        )
         temporary.replace(destination)
 
     async def _visible_apps(self) -> set[str]:
@@ -240,7 +244,9 @@ class FlyBackend(Backend):
         try:
             payload = json.loads(stdout.decode("utf-8") or "[]")
         except json.JSONDecodeError as error:
-            raise BackendError("Fly CLI returned invalid app inventory JSON.") from error
+            raise BackendError(
+                "Fly CLI returned invalid app inventory JSON."
+            ) from error
         rows = self._json_rows(payload, "apps", "Apps")
         return {
             name
@@ -267,9 +273,7 @@ class FlyBackend(Backend):
             slugs = [
                 slug
                 for slug, display_name in payload.items()
-                if isinstance(slug, str)
-                and slug
-                and isinstance(display_name, str)
+                if isinstance(slug, str) and slug and isinstance(display_name, str)
             ]
         if not slugs:
             raise BackendError(
@@ -293,7 +297,9 @@ class FlyBackend(Backend):
         try:
             payload = json.loads(stdout.decode("utf-8") or "{}")
         except json.JSONDecodeError as error:
-            raise BackendError("Fly created an app but returned invalid JSON.") from error
+            raise BackendError(
+                "Fly created an app but returned invalid JSON."
+            ) from error
         rows = self._json_rows(payload, "apps", "Apps")
         if isinstance(payload, dict):
             rows.insert(0, cast("dict[str, object]", payload))
@@ -301,7 +307,11 @@ class FlyBackend(Backend):
             (
                 name
                 for row in rows
-                if (name := self._named_value(row, "name", "Name", "app_name", "AppName"))
+                if (
+                    name := self._named_value(
+                        row, "name", "Name", "app_name", "AppName"
+                    )
+                )
             ),
             None,
         )
@@ -724,7 +734,6 @@ class FlySandbox(Sandbox):
     async def stop(self) -> None:
         if self._stopped:
             return
-        self._stopped = True
         self._stop_requested = True
         if not self._backend.app:
             return
@@ -737,7 +746,7 @@ class FlySandbox(Sandbox):
                     "--app",
                     self._backend.app,
                     self._machine_id,
-                    timeout=60,
+                    timeout=15,
                 )
             else:
                 await self._backend._run_fly(
@@ -746,10 +755,13 @@ class FlySandbox(Sandbox):
                     self._machine_id,
                     "--app",
                     self._backend.app,
-                    timeout=45,
+                    timeout=15,
                 )
         except BackendError:
-            pass
+            raise BackendError(
+                "Fly cleanup failed; retry or remove the machine in the provider console"
+            ) from None
+        self._stopped = True
 
     async def wait_for_death(self) -> None:
         while True:

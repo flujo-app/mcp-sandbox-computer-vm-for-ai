@@ -40,6 +40,10 @@ class E2BBackendConfig(BackendConfig):
     envs: dict[str, str] | None = None
 
 
+class _OutputLimitExceeded(Exception):
+    pass
+
+
 class E2BBackend(Backend):
     """E2B backend implementation.
 
@@ -301,6 +305,19 @@ class E2BSandbox(Sandbox):
         """Core exec implementation."""
         cmd = self._build_command(request)
         run_kwargs = self._build_run_kwargs(request)
+        streamed_bytes = 0
+
+        def bound_output(chunk: str) -> None:
+            nonlocal streamed_bytes
+            streamed_bytes += len(chunk.encode("utf-8"))
+            if streamed_bytes > request.output_limit:
+                raise _OutputLimitExceeded()
+
+        run_kwargs.update(
+            on_stdout=bound_output,
+            on_stderr=bound_output,
+            request_timeout=min(request.timeout + 10, 3610),
+        )
         stdin_data = request.stdin  # capture for type narrowing
 
         if stdin_data is not None:
@@ -353,7 +370,19 @@ class E2BSandbox(Sandbox):
                 exec_duration_ms=elapsed_ms,
             )
 
+        except _OutputLimitExceeded:
+            await self.stop()
+            return ExecResult(
+                stdout="",
+                stderr="[kilntainers: output limit exceeded; sandbox stopped]",
+                exit_code=1,
+                exec_duration_ms=int((time.monotonic() - start_time) * 1000),
+            )
+        except asyncio.CancelledError:
+            await self.stop()
+            raise
         except TimeoutException:
+            await self.stop()
             # E2B SDK raises TimeoutException when command exceeds timeout
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             return ExecResult(
@@ -420,24 +449,17 @@ class E2BSandbox(Sandbox):
             return await self._do_exec(request)
 
     async def stop(self) -> None:
-        """Stop the sandbox and release all resources.
-
-        Idempotent — safe to call on an already-stopped sandbox.
-        """
+        """Kill the provider sandbox; a failed cleanup remains retryable."""
         if self._stopped:
             return
-        self._stopped = True
         self._stop_requested = True
-
         try:
-            await asyncio.wait_for(
-                self._e2b_sandbox.kill(),  # ty: ignore[no-matching-overload]
-                timeout=10,
-            )
-        except asyncio.TimeoutError:
-            pass  # Best-effort — E2B may take time to terminate
+            await asyncio.wait_for(self._e2b_sandbox.kill(), timeout=15)
         except Exception:
-            pass  # Best-effort cleanup
+            raise BackendError(
+                "E2B cleanup failed; retry or remove the sandbox in the provider console"
+            ) from None
+        self._stopped = True
 
     async def wait_for_death(self) -> None:
         """Block until cancelled.

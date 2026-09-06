@@ -147,6 +147,9 @@ class MockBackend(Backend):
         """Return the configured tool instructions."""
         return self._tool_instructions
 
+    async def attach_sandbox(self, computer_id):
+        return None
+
     def is_validated(self) -> bool:
         """Test helper: check if validate was called."""
         return self._validated

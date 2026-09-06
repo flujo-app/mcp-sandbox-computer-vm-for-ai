@@ -448,6 +448,7 @@ class ModalSandbox(Sandbox):
             )
 
         except _OutputLimitExceeded:
+            await self.stop()
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             return ExecResult(
                 stdout="",
@@ -461,7 +462,11 @@ class ModalSandbox(Sandbox):
                 exec_duration_ms=elapsed_ms,
             )
 
+        except asyncio.CancelledError:
+            await self.stop()
+            raise
         except asyncio.TimeoutError:
+            await self.stop()
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             return ExecResult(
                 stdout="",
@@ -495,24 +500,20 @@ class ModalSandbox(Sandbox):
             return await self._do_exec(request)
 
     async def stop(self) -> None:
-        """Stop the sandbox and release all resources.
-
-        Idempotent — safe to call on an already-stopped sandbox.
-        """
+        """Await provider termination and close the SDK connection."""
         if self._stopped:
             return
-        self._stopped = True
         self._stop_requested = True
-
         try:
             await asyncio.wait_for(
-                self._modal_sandbox.terminate.aio(),
-                timeout=10,
+                self._modal_sandbox.terminate.aio(wait=True), timeout=15
             )
-        except asyncio.TimeoutError:
-            pass  # Best-effort — Modal may take time to terminate
+            await asyncio.wait_for(self._modal_sandbox.detach.aio(), timeout=5)
         except Exception:
-            pass  # Best-effort cleanup
+            raise BackendError(
+                "Modal cleanup failed; retry or remove the sandbox in the provider console"
+            ) from None
+        self._stopped = True
 
     async def wait_for_death(self) -> None:
         """Block until the sandbox dies unexpectedly.

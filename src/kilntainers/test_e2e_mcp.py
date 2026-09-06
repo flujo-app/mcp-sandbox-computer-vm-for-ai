@@ -123,7 +123,7 @@ class TestE2EStdioProtocol:
 
                 tools = response["result"].get("tools", [])
                 tool_names = {tool["name"] for tool in tools}
-                assert tool_names == {"terminal_execute"}
+                assert tool_names == {"terminal_execute", "computer_release"}
                 assert all("description" in tool for tool in tools)
 
             finally:

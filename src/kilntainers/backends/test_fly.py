@@ -68,7 +68,15 @@ async def test_validate_installs_cli_and_creates_default_app(
 
     assert backend.app == "generated-fly-app"
     assert backend._fly_cli == "/tools/flyctl"
-    assert ("apps", "create", "--generate-name", "--org", "personal", "--json", "--yes") in calls
+    assert (
+        "apps",
+        "create",
+        "--generate-name",
+        "--org",
+        "personal",
+        "--json",
+        "--yes",
+    ) in calls
     assert json.loads((tmp_path / "fly.json").read_text()) == {
         "app": "generated-fly-app"
     }

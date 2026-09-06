@@ -222,7 +222,7 @@ async def test_handler_success_command(
 
     result = await handler(command="echo hello", ctx=mock_context)
 
-    assert result.isError is False
+    assert result.is_error is False
     content = result.content[0]
     assert content.type == "text"
 
@@ -251,7 +251,7 @@ async def test_handler_failed_command(
 
     result = await handler(command="nonexistent", ctx=mock_context)
 
-    assert result.isError is False
+    assert result.is_error is False
     response_json = json.loads(result.content[0].text)
     assert response_json["exit_code"] == 127
     assert response_json["stderr"] == "command not found\n"
@@ -270,7 +270,7 @@ async def test_handler_timeout_result(
 
     result = await handler(command="sleep 300", ctx=mock_context)
 
-    assert result.isError is False
+    assert result.is_error is False
     response_json = json.loads(result.content[0].text)
     assert response_json["exit_code"] == 124
 
@@ -288,7 +288,7 @@ async def test_handler_output_limit_result(
 
     result = await handler(command="yes", ctx=mock_context)
 
-    assert result.isError is False
+    assert result.is_error is False
     response_json = json.loads(result.content[0].text)
     assert response_json["exit_code"] == 1
 
@@ -337,7 +337,7 @@ async def test_handler_invalid_inputs(server_config: ServerConfig) -> None:
 
     result = await handler(command="ls", args=["/bin/ls"], ctx=None)
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "Cannot provide both" in result.content[0].text
 
 
@@ -355,7 +355,7 @@ async def test_handler_sandbox_died_error(
 
     result = await handler(command="test", ctx=mock_context)
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "died" in result.content[0].text.lower()
 
 
@@ -365,7 +365,7 @@ async def test_handler_no_context_error(server_config: ServerConfig) -> None:
 
     result = await handler(command="ls", ctx=None)
 
-    assert result.isError is True
+    assert result.is_error is True
     assert "no context provided" in result.content[0].text
 
 
@@ -561,7 +561,9 @@ async def test_death_triggers_sigterm_stdio(
 ) -> None:
     """Sandbox death triggers SIGTERM in stdio mode."""
     kill_calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr(
+        signal, "raise_signal", lambda sig: kill_calls.append((os.getpid(), sig))
+    )
 
     lifespan_fn = create_lifespan(mock_backend, "stdio")
     mock_server = MagicMock()
@@ -584,7 +586,9 @@ async def test_death_does_not_trigger_sigterm_http(
 ) -> None:
     """Sandbox death does NOT trigger SIGTERM in HTTP mode."""
     kill_calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr(
+        signal, "raise_signal", lambda sig: kill_calls.append((os.getpid(), sig))
+    )
 
     lifespan_fn = create_lifespan(mock_backend, "http")
     mock_server = MagicMock()
@@ -726,8 +730,8 @@ async def test_handler_backend_error_on_lazy_creation(
 
     result = await handler(command="test", ctx=ctx)
 
-    assert result.isError is True
-    assert "mock creation failure" in result.content[0].text
+    assert result.is_error is True
+    assert "could not be created" in result.content[0].text
 
 
 async def test_session_context_death_monitor_starts_after_creation(
@@ -766,14 +770,16 @@ def test_create_server_with_lifespan(mock_backend: MockBackend) -> None:
     assert server.name == "Kilntainers"
 
 
-def test_create_server_with_override_description(mock_backend: MockBackend) -> None:
+async def test_create_server_with_override_description(
+    mock_backend: MockBackend,
+) -> None:
     """Tool description uses override when provided."""
     config = ServerConfig(tool_instruction_override="Custom override")
     server = create_server(mock_backend, config)
 
     # The tool should be registered with the override description
-    # FastMCP stores tools in _tool_manager
-    assert hasattr(server, "_tool_manager")
+    tools = await server.list_tools()
+    assert (tools[0].description or "").startswith("Custom override")
 
 
 def test_create_server_raises_on_empty_description() -> None:

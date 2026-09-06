@@ -180,6 +180,10 @@ class DockerBackend(Backend):
                 proc.communicate(stdin_data),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -232,7 +236,12 @@ class DockerBackend(Backend):
             stdout=asyncio.subprocess.DEVNULL,
             stderr=None,  # inherit parent stderr — shows pull progress
         )
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=120)
+        except (asyncio.CancelledError, TimeoutError):
+            proc.kill()
+            await proc.wait()
+            raise
         if proc.returncode != 0:
             raise BackendError(
                 f"Failed to pull image '{self._config.image}'. "
@@ -596,6 +605,10 @@ class DockerSandbox(Sandbox):
                 proc.communicate(stdin_data),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            proc.kill()
+            await proc.wait()
+            raise
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -766,8 +779,13 @@ class DockerSandbox(Sandbox):
                 exec_duration_ms=elapsed_ms,
             )
 
+        except asyncio.CancelledError:
+            await self._kill_subprocess(proc)
+            await self.stop()
+            raise
         except asyncio.TimeoutError:
             await self._kill_subprocess(proc)
+            await self.stop()
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
             return ExecResult(
                 stdout="",
@@ -780,6 +798,7 @@ class DockerSandbox(Sandbox):
             for exc in eg.exceptions:
                 if isinstance(exc, _OutputLimitExceeded):
                     await self._kill_subprocess(proc)
+                    await self.stop()
                     elapsed_ms = int((time.monotonic() - start_time) * 1000)
                     return ExecResult(
                         stdout="",
@@ -807,35 +826,45 @@ class DockerSandbox(Sandbox):
             return await self._do_exec(request)
 
     async def stop(self) -> None:
-        """Stop the sandbox and release all resources.
-
-        Idempotent — safe to call on an already-stopped sandbox.
-        """
+        """Stop the actual container and confirm temporary removal before returning."""
         if self._stopped:
             return
-        self._stopped = True
         self._stop_requested = True
-
-        try:
-            # docker stop sends SIGTERM, waits grace period, then SIGKILL
-            proc = await asyncio.create_subprocess_exec(
-                *self._engine_prefix,
-                "stop",
-                "-t",
-                "5",
+        operation = ["rm", "--force"] if self.temporary else ["stop", "-t", "5"]
+        await self._run_docker(*operation, self._container_id, check=False, timeout=12)
+        deadline = time.monotonic() + 8
+        while True:
+            code, output, error = await self._run_docker(
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
                 self._container_id,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+                check=False,
+                timeout=3,
             )
-            try:
-                # 5s Docker grace + 5s buffer for Docker overhead
-                await asyncio.wait_for(proc.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-        except Exception:
-            # Best-effort cleanup — don't propagate errors from stop
-            pass
+            if code != 0:
+                message = error.lower()
+                if any(
+                    marker in message
+                    for marker in (
+                        b"no such object",
+                        b"no such container",
+                        b"no container with name or id",
+                    )
+                ):
+                    self._stopped = True
+                    return
+                raise BackendError(
+                    "Docker removal could not be verified; cleanup remains pending"
+                )
+            if not self.temporary and b"false" in output:
+                self._stopped = True
+                return
+            if time.monotonic() >= deadline:
+                raise BackendError(
+                    "Docker cleanup did not finish; operator cleanup is required"
+                )
+            await asyncio.sleep(0.1)
 
     async def wait_for_death(self) -> None:
         """Block until the sandbox dies unexpectedly.

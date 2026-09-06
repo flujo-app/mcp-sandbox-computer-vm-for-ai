@@ -1,3 +1,5 @@
+> Historical architecture notes. The current public SDK 2 / explicit-handle lifecycle is specified in the 0.3 amendment in ../functional_spec.md and implemented in server.py and leases.py.
+
 # Architecture: MCP Server & Tool Layer
 
 **Phase 4** of the architecture specification. Defines how the MCP server is structured: library choice, tool registration, request validation, response formatting, tool description assembly, and how the server delegates to the backend. Covers both stdio and Streamable HTTP transport wiring.

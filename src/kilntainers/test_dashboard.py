@@ -12,15 +12,16 @@ from kilntainers.dashboard import DASHBOARD_MIME_TYPE, DASHBOARD_URI
 from kilntainers.server import create_server
 
 
-def test_dashboard_tool_resource_and_extension_are_registered() -> None:
+async def test_dashboard_tool_resource_and_extension_are_registered() -> None:
     server = create_server(
         MockBackend(BackendConfig()), ServerConfig(enable_lifecycle_tools=True)
     )
-    tools = {tool.name: tool for tool in server._tool_manager.list_tools()}
-    resources = server._resource_manager.list_resources()
+    tools = {tool.name: tool for tool in await server.list_tools()}
+    resources = await server.list_resources()
 
     assert set(tools) == {
         "terminal_execute",
+        "computer_release",
         "computer_dashboard",
         "computer_list",
         "computer_create",
@@ -38,19 +39,13 @@ def test_dashboard_tool_resource_and_extension_are_registered() -> None:
     assert str(resources[0].uri) == DASHBOARD_URI
     assert resources[0].mime_type == DASHBOARD_MIME_TYPE
 
-    capabilities = server._mcp_server.create_initialization_options().capabilities
-    payload = capabilities.model_dump(by_alias=True, exclude_none=True)
-    assert payload["extensions"] == {
-        "io.modelcontextprotocol/ui": {"mimeTypes": [DASHBOARD_MIME_TYPE]}
-    }
-
 
 async def test_dashboard_html_is_self_contained_and_calls_management_tools() -> None:
     server = create_server(
         MockBackend(BackendConfig()), ServerConfig(enable_lifecycle_tools=True)
     )
-    resource = server._resource_manager.list_resources()[0]
-    html = await resource.read()
+    contents = await server.read_resource(DASHBOARD_URI)
+    html = next(iter(contents)).content
 
     assert isinstance(html, str)
     assert "2026-01-26" in html
@@ -60,24 +55,20 @@ async def test_dashboard_html_is_self_contained_and_calls_management_tools() -> 
     assert "<link rel=" not in html
 
 
-def test_lifecycle_tools_and_dashboard_are_disabled_by_default() -> None:
+async def test_lifecycle_tools_and_dashboard_are_disabled_by_default() -> None:
     server = create_server(MockBackend(BackendConfig()), ServerConfig())
 
-    tools = {tool.name for tool in server._tool_manager.list_tools()}
-    resources = server._resource_manager.list_resources()
-    capabilities = server._mcp_server.create_initialization_options().capabilities
-    payload = capabilities.model_dump(by_alias=True, exclude_none=True)
-
-    assert tools == {"terminal_execute"}
+    tools = {tool.name for tool in await server.list_tools()}
+    resources = await server.list_resources()
+    assert tools == {"terminal_execute", "computer_release"}
     assert resources == []
-    assert "extensions" not in payload
 
 
 async def _ok(request):
     return JSONResponse({"ok": True})
 
 
-def test_bearer_middleware_protects_only_mcp_route() -> None:
+def test_bearer_middleware_protects_all_routes() -> None:
     app = Starlette(
         routes=[
             Route("/", _ok),
@@ -88,10 +79,12 @@ def test_bearer_middleware_protects_only_mcp_route() -> None:
     app.add_middleware(
         BearerTokenMiddleware,  # ty: ignore[invalid-argument-type]
         token="test-secret",
+        allowed_hosts=["testserver"],
     )
 
     with TestClient(app) as client:
-        assert client.get("/healthz").status_code == 200
+        assert client.get("/healthz").status_code == 401
+        assert client.get("/").status_code == 401
         assert client.get("/mcp").status_code == 401
         assert (
             client.get("/mcp", headers={"Authorization": "Bearer wrong"}).status_code
