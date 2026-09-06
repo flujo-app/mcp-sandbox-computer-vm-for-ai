@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import Annotated, Any, AsyncContextManager
 
+import anyio
 from mcp.server import MCPServer
 from mcp.server.apps import Apps
 from mcp.server.mcpserver import Context
@@ -412,6 +413,13 @@ async def _use(
         yield lease.session, lease.handle
 
 
+async def _stop_cancelled_sandbox(sandbox):
+    # AnyIO cancellation can repeat at each await. Keep the actual provider stop
+    # awaited instead of detaching it when the HTTP connection disappears.
+    with anyio.CancelScope(shield=True):
+        await asyncio.wait_for(sandbox.stop(), 20)
+
+
 def _create_handler(config: ServerConfig):
     async def handler(
         command=None,
@@ -477,7 +485,7 @@ def _create_handler(config: ServerConfig):
                 except (asyncio.CancelledError, TimeoutError):
                     # Killing a client-side request does not cancel provider-side work.
                     # Stop the affected computer. Permanent Docker/Fly writable state remains.
-                    await asyncio.shield(asyncio.wait_for(sandbox.stop(), 20))
+                    await _stop_cancelled_sandbox(sandbox)
                     raise
                 payload = {
                     "computer_id": selected_id,

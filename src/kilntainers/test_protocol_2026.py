@@ -10,6 +10,7 @@ import pytest
 import uvicorn
 from mcp.client import Client
 from mcp.client.streamable_http import streamable_http_client
+from sse_starlette.sse import AppStatus
 
 from kilntainers.backends.base import ExecResult
 from kilntainers.backends.test_utils import MockBackend, MockSandbox
@@ -54,6 +55,10 @@ class MemoryBackend(MockBackend):
 
 @asynccontextmanager
 async def serve(backend, **kwargs):
+    # Each fixture represents a fresh process. sse-starlette's Uvicorn watcher
+    # records previous server shutdown in this public process-global flag.
+    # Sharing that flag across independent fixture servers can truncate initialize.
+    AppStatus.should_exit = False
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -84,7 +89,9 @@ async def serve(backend, **kwargs):
 async def connect(url, mode):
     async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {TOKEN}"}) as http:
         transport = streamable_http_client(url + "/mcp", http_client=http)
-        async with Client(transport, mode=mode, read_timeout_seconds=5) as client:
+        # Allow CI scheduling/Windows startup latency; cancellation cleanup below
+        # still has its own strict five-second assertion.
+        async with Client(transport, mode=mode, read_timeout_seconds=15) as client:
             yield client
 
 
@@ -358,3 +365,15 @@ async def test_cancelled_creation_rolls_back_the_resource_returned_later(monkeyp
         assert await state.registry.cleanup_pending(wait=True)
         assert not state.registry.abandoned
         assert len(backend.created) == 1 and backend.created[0].is_stopped()
+
+
+async def test_fresh_http_fixture_does_not_inherit_previous_server_shutdown():
+    async with serve(MemoryBackend()) as url:
+        async with connect(url, "legacy") as client:
+            assert await call(client, "computer_list") is not None
+    # The SSE watcher polls shutdown asynchronously, so make the old server's
+    # final state deterministic before creating the next independent fixture.
+    AppStatus.should_exit = True
+    async with serve(MemoryBackend()) as url:
+        async with connect(url, "legacy") as client:
+            assert await call(client, "computer_list") is not None

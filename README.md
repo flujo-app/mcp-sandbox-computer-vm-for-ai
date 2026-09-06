@@ -31,6 +31,9 @@ This version uses public Python MCP SDK 2.1.1 and MCP Apps APIs. It serves moder
 **2026-07-28** and deliberate legacy **2025-11-25** clients over stdio and
 Streamable HTTP at `/mcp`. SDK v2 and the dated MCP protocol are separate
 version numbers. The old standalone SSE endpoint is not provided.
+Shutdown also works when a stdio client
+keeps its input pipe open: SIGTERM/SIGINT on POSIX and SIGBREAK on Windows await
+application cleanup before exit.
 
 HTTP clients must save the returned `sandbox_handle` and send it with later calls:
 

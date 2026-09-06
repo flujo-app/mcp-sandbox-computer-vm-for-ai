@@ -42,7 +42,20 @@ def owned_containers():
         return []
     if any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in ids):
         raise RuntimeError("Unexpected fixture ID")
-    data = json.loads(docker("inspect", *ids).stdout)
+    data = []
+    for container_id in ids:
+        result = docker("inspect", container_id, check=False)
+        if result.returncode:
+            # Idle removal can legitimately win between list and inspect. Only
+            # that exact missing-ID result is absence; daemon errors still fail.
+            error = result.stderr.lower()
+            if "no such object:" in error and container_id in error:
+                continue
+            result.check_returncode()
+        records = json.loads(result.stdout)
+        if len(records) != 1 or records[0].get("Id") != container_id:
+            raise RuntimeError("Unexpected fixture inspection response")
+        data.extend(records)
     for item in data:
         labels = item.get("Config", {}).get("Labels", {})
         if (
