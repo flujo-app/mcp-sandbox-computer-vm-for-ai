@@ -153,7 +153,7 @@ async def persistent_docker(directory):
                 immutable_id = record["Id"]
             else:
                 assert record["Id"] == immutable_id
-                assert result["stdout"] == "permanent-proof\\n"
+                assert result["stdout"] == "permanent-proof\n"
                 await call(
                     client,
                     "computer_delete",
