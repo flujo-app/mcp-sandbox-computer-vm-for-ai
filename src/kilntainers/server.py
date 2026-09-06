@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import os
 import signal
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -156,12 +155,18 @@ class SessionContext:
                 # Unexpected error monitoring sandbox — treat as death
                 pass
 
+            # Some providers treat cancellation as a normal return from their
+            # death watcher. Cleanup/restart must not emit a second termination
+            # signal or interrupt the resource cleanup that requested cancellation.
+            task = asyncio.current_task()
+            if task is not None and task.cancelling():
+                return
             # Sandbox died (or monitoring failed)
             if self._transport == "stdio":
                 if self._death_callback is not None:
                     self._death_callback()
                 else:
-                    os.kill(os.getpid(), signal.SIGTERM)
+                    signal.raise_signal(signal.SIGTERM)
 
         self._death_tasks[computer_id] = asyncio.create_task(_monitor_death())
 

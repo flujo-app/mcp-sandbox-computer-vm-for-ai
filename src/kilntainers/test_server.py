@@ -561,7 +561,9 @@ async def test_death_triggers_sigterm_stdio(
 ) -> None:
     """Sandbox death triggers SIGTERM in stdio mode."""
     kill_calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr(
+        signal, "raise_signal", lambda sig: kill_calls.append((os.getpid(), sig))
+    )
 
     lifespan_fn = create_lifespan(mock_backend, "stdio")
     mock_server = MagicMock()
@@ -584,7 +586,9 @@ async def test_death_does_not_trigger_sigterm_http(
 ) -> None:
     """Sandbox death does NOT trigger SIGTERM in HTTP mode."""
     kill_calls: list[tuple[int, int]] = []
-    monkeypatch.setattr(os, "kill", lambda pid, sig: kill_calls.append((pid, sig)))
+    monkeypatch.setattr(
+        signal, "raise_signal", lambda sig: kill_calls.append((os.getpid(), sig))
+    )
 
     lifespan_fn = create_lifespan(mock_backend, "http")
     mock_server = MagicMock()

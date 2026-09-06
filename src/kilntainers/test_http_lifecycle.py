@@ -47,14 +47,14 @@ class TestHTTPLifespan:
         backend = MockBackend(BackendConfig())
         sigterm_calls: list[tuple[int, int]] = []
 
-        # Mock os.kill to capture calls
-        original_kill = os.kill
+        # Capture the portable process-local termination request
+        original_kill = signal.raise_signal
 
-        def mock_kill(pid: int, sig: int) -> None:  # type: ignore[assignment]
+        def mock_kill(sig: int) -> None:  # type: ignore[assignment]
             if sig == signal.SIGTERM:
-                sigterm_calls.append((pid, sig))
+                sigterm_calls.append((os.getpid(), sig))
 
-        os.kill = mock_kill  # type: ignore[assignment]
+        signal.raise_signal = mock_kill  # type: ignore[assignment]
 
         try:
             lifespan_fn = create_lifespan(backend, "http")
@@ -73,7 +73,7 @@ class TestHTTPLifespan:
                 await asyncio.sleep(0.2)
 
         finally:
-            os.kill = original_kill  # type: ignore[assignment]
+            signal.raise_signal = original_kill  # type: ignore[assignment]
 
         # In HTTP mode, SIGTERM should NOT be sent
         assert len(sigterm_calls) == 0, (

@@ -153,6 +153,7 @@ async def stdio_signal(backend, directory):
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
     assert process.stdin is not None and process.stdout is not None
+    assert process.stderr is not None
     try:
         message = {
             "jsonrpc": "2.0",

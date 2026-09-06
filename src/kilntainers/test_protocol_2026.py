@@ -377,3 +377,30 @@ async def test_fresh_http_fixture_does_not_inherit_previous_server_shutdown():
     async with serve(MemoryBackend()) as url:
         async with connect(url, "legacy") as client:
             assert await call(client, "computer_list") is not None
+
+
+async def test_monitor_cancellation_is_not_unexpected_provider_death(monkeypatch):
+    from kilntainers.server import SessionContext
+
+    backend = MemoryBackend()
+    deaths = []
+    session = SessionContext(
+        backend, "stdio", death_callback=lambda: deaths.append(True)
+    )
+    sandbox = await session.get_or_create_sandbox()
+    started = asyncio.Event()
+
+    async def swallow_cancel():
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            return  # WASM's no-process watcher has this contract.
+
+    assert isinstance(sandbox, MemorySandbox)
+    monkeypatch.setattr(sandbox, "wait_for_death", swallow_cancel)
+    async with asyncio.timeout(5):
+        await started.wait()
+        await session.cleanup()
+    assert sandbox.is_stopped()
+    assert deaths == [], "Normal cleanup must not emit another termination signal"
