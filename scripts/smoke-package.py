@@ -183,7 +183,10 @@ async def stdio_signal(backend, directory):
             signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGTERM
         )
         await asyncio.wait_for(process.wait(), 40)
-        assert process.returncode == 0
+        assert process.returncode == 0, (
+            process.returncode,
+            (await process.stderr.read()).decode("utf-8", errors="replace")[-6000:],
+        )
         if backend == "docker":
             assert_absent(name)
         print(

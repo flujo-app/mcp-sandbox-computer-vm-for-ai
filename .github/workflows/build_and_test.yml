@@ -27,10 +27,17 @@ jobs:
       - run: uv run --frozen pytest -q -m "not integration and not e2e and not http_integration"
       - run: uv build
       - name: Installed wheel and actual WASM subprocess acceptance
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           wheel=$(ls dist/*.whl)
           uv run --no-project --with "$wheel[wasm]" python scripts/smoke-package.py
+      - name: Installed wheel and native Windows signal acceptance
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $taskWheel = Get-ChildItem -LiteralPath dist -Filter '*.whl' | Select-Object -First 1
+          uv run --no-project --with "$($taskWheel.FullName)[wasm]" python scripts/smoke-package.py
   docker:
     name: Real Docker and container artifact
     runs-on: ubuntu-latest
