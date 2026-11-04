@@ -311,13 +311,11 @@ class FlyBackend(Backend):
         return app
 
     async def _resolve_app(self) -> None:
-        visible = await self._visible_apps()
         if self._app:
-            if self._app not in visible:
-                raise BackendError(
-                    f"Fly App '{self._app}' is not visible to the current account or token."
-                )
+            # An app-scoped deploy token cannot list apps. Listing this app's Machines
+            # in _validate proves access with the permission that token does have.
             return
+        visible = await self._visible_apps()
         saved = self._load_saved_app()
         if saved and saved in visible:
             self._app = saved
@@ -342,7 +340,12 @@ class FlyBackend(Backend):
                 + (f"\n{detail}" if detail else "")
             )
         await self._resolve_app()
-        await self._list_machine_rows()
+        try:
+            await self._list_machine_rows()
+        except BackendError as error:
+            raise BackendError(
+                f"Fly App '{self._app}' is not visible to the current account or token."
+            ) from error
 
     async def _list_machine_rows(self) -> list[dict[str, object]]:
         if not self._app:
