@@ -234,3 +234,43 @@ def test_remote_command_supports_workdir_args_and_stdin() -> None:
     assert argv[2].startswith("cd -- '/workspace dir' && printf %s ")
     assert "base64 -d" in argv[2]
     assert "cat 'file with spaces'" in argv[2]
+
+
+@pytest.mark.asyncio
+async def test_validate_accepts_app_scoped_deploy_token(monkeypatch) -> None:
+    backend = FlyBackend(FlyBackendConfig(app="sandbox-app", token="deploy-token"))
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        "kilntainers.backends.fly.ensure_flyctl", lambda command: "/tools/flyctl"
+    )
+
+    async def fake_run(*args, **kwargs):
+        calls.append(args)
+        if args[:2] == ("apps", "list"):
+            raise BackendError("unauthorized")
+        if args[:2] == ("machine", "list"):
+            return 0, b"[]", b""
+        return 0, b"{}", b""
+
+    monkeypatch.setattr(backend, "_run_fly", fake_run)
+    await backend.validate()
+
+    assert backend.app == "sandbox-app"
+    assert not any(call[:2] == ("apps", "list") for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_validate_reports_a_named_app_without_access(monkeypatch) -> None:
+    backend = FlyBackend(FlyBackendConfig(app="sandbox-app", token="deploy-token"))
+    monkeypatch.setattr(
+        "kilntainers.backends.fly.ensure_flyctl", lambda command: "/tools/flyctl"
+    )
+
+    async def fake_run(*args, **kwargs):
+        if args[:2] == ("machine", "list"):
+            raise BackendError("unauthorized")
+        return 0, b"{}", b""
+
+    monkeypatch.setattr(backend, "_run_fly", fake_run)
+    with pytest.raises(BackendError, match="not visible to the current account"):
+        await backend.validate()
